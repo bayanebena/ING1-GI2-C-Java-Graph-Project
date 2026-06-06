@@ -32,14 +32,18 @@ public class Person extends Agent {
     public void update(String alert) {
         if (alert.equals("FIRE")) {
             setState(AgentState.PANICKED);
-            // Only start moving if not already guided
-            if (getStrategy() == null) {
-                // Stay put — wait for supervisor order
+            // Switch to panic strategy if already moving
+            if (getStrategy() != null) {
+                setStrategy(new PanicStrategy());
+                setPath(new java.util.ArrayList<>());
             }
         } else if (alert.equals("NORMAL")) {
             setState(AgentState.CALM);
-            setStrategy(null);
-            setPath(new java.util.ArrayList<>());
+            // Reset to evacuate strategy — do NOT set null (would freeze agents)
+            if (getStrategy() != null) {
+                setStrategy(new EvacuateStrategy());
+                setPath(new java.util.ArrayList<>());
+            }
         }
     }
 }
