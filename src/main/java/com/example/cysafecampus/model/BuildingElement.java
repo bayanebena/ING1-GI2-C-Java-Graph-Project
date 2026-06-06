@@ -4,40 +4,29 @@ import java.io.Serializable;
 
 /**
  * Abstract class representing a physical space in the building.
- * All building elements share common properties like capacity, occupancy,
- * attractiveness, and accessibility status.
  */
 public abstract class BuildingElement implements Serializable {
 
-    /** Unique name of the element (e.g., "Room 101", "Corridor A") */
     private String name;
-
-    /** Maximum number of agents allowed in this element */
     private int maxCapacity;
-
-    /** Current number of agents present */
     private int currentOccupancy;
-
-    /**
-     * Accessibility status of this element.
-     * Replaces the old boolean isBlocked for finer-grained control.
-     */
     private BlockStatus status;
-
-    /** Score representing how attractive (>0) or repulsive (<0) the element is for navigation */
     private double attractivenessScore;
 
-    /**
-     * Constructor for BuildingElement.
-     * @param name the name of the element
-     * @param maxCapacity the maximum capacity of the element
-     */
+    /** Total agents that have passed through this element (for statistics) */
+    private int totalAgentsPassed;
+
+    /** Sum of speeds of all agents that passed (for average speed stat) */
+    private double totalSpeedSum;
+
     public BuildingElement(String name, int maxCapacity) {
         this.name = name;
         this.maxCapacity = maxCapacity;
         this.currentOccupancy = 0;
         this.status = BlockStatus.ACCESSIBLE;
         this.attractivenessScore = 0.0;
+        this.totalAgentsPassed = 0;
+        this.totalSpeedSum = 0.0;
     }
 
     public String getName() { return name; }
@@ -45,33 +34,47 @@ public abstract class BuildingElement implements Serializable {
     public int getCurrentOccupancy() { return currentOccupancy; }
     public BlockStatus getStatus() { return status; }
     public double getAttractivenessScore() { return attractivenessScore; }
+    public int getTotalAgentsPassed() { return totalAgentsPassed; }
+
+    /** Returns average speed of agents that passed through, or 0 if none. */
+    public double getAverageSpeed() {
+        return totalAgentsPassed > 0 ? totalSpeedSum / totalAgentsPassed : 0.0;
+    }
 
     public void setName(String name) { this.name = name; }
     public void setMaxCapacity(int maxCapacity) { this.maxCapacity = maxCapacity; }
-    public void setCurrentOccupancy(int occupancy) { this.currentOccupancy = occupancy; }
     public void setAttractivenessScore(double score) { this.attractivenessScore = score; }
-
-    /**
-     * Updates the accessibility status of this element.
-     * @param status the new BlockStatus
-     */
     public void setStatus(BlockStatus status) { this.status = status; }
 
     /**
-     * Convenience method — true if status is BLOCKED.
-     * Used by PathFinder to skip impassable elements.
+     * Sets current occupancy directly (used by serializer).
      */
-    public boolean isBlocked() {
-        return status == BlockStatus.BLOCKED;
+    public void setCurrentOccupancy(int occupancy) {
+        this.currentOccupancy = Math.max(0, occupancy);
     }
 
     /**
-     * Checks if the element is at full capacity.
-     * @return true if current occupancy reaches or exceeds max capacity
+     * Increments occupancy when an agent enters. Also records stats.
+     * @param agentSpeed speed of the entering agent
      */
-    public boolean isFull() {
-        return currentOccupancy >= maxCapacity;
+    public void agentEnters(double agentSpeed) {
+        currentOccupancy++;
+        totalAgentsPassed++;
+        totalSpeedSum += agentSpeed;
     }
+
+    /**
+     * Decrements occupancy when an agent leaves.
+     */
+    public void agentLeaves() {
+        if (currentOccupancy > 0) currentOccupancy--;
+    }
+
+    public boolean isBlocked() { return status == BlockStatus.BLOCKED; }
+    public boolean isFull() { return currentOccupancy >= maxCapacity; }
+
+    /** True if occupancy is over capacity (strong congestion). */
+    public boolean isOvercrowded() { return currentOccupancy > maxCapacity; }
 
     @Override
     public String toString() {
