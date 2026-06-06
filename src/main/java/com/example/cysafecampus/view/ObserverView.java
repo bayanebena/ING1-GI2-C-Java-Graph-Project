@@ -28,7 +28,7 @@ import java.util.Map;
 public class ObserverView {
 
     private static final int CW = 780, CH = 480;
-    private static final double NR = 28;
+    private static final double NR = 34;
 
     private final Stage stage;
     private final GraphController controller;
@@ -74,12 +74,30 @@ public class ObserverView {
             tickLbl, agentCountLbl, readOnly);
         header.setPadding(new Insets(8, 14, 8, 14));
         header.setAlignment(Pos.CENTER_LEFT);
-        header.setStyle("-fx-background-color:#eceff1;-fx-border-color:#cfd8dc;-fx-border-width:0 0 1 0;");
+        header.setBackground(new javafx.scene.layout.Background(new javafx.scene.layout.BackgroundFill(Color.web("#f8f9fa"), javafx.scene.layout.CornerRadii.EMPTY, javafx.geometry.Insets.EMPTY)));
+        header.setStyle("-fx-border-color:#e8eaed;-fx-border-width:0 0 1 0;");
 
         // ── Canvas ────────────────────────────────────────
         canvas = new Canvas(CW, CH);
+
+        // Click on node to show stats in title bar
+        canvas.setOnMouseClicked(e -> {
+            double mx = e.getX(), my = e.getY();
+            for (BuildingElement el : controller.getGraph().getElements()) {
+                if (el.getName().contains("↔")) continue;
+                javafx.geometry.Point2D p = pos.get(el.getName());
+                if (p != null && Math.hypot(p.getX()-mx, p.getY()-my) < NR+8) {
+                    stage.setTitle("SafeCampus — " + el.getName()
+                        + " | Passés: " + el.getTotalAgentsPassed()
+                        + " | Vit.moy: " + String.format("%.1f", el.getAverageSpeed()));
+                    return;
+                }
+            }
+            stage.setTitle("CY SafeCampus — Observation");
+        });
+
         StackPane center = new StackPane(canvas);
-        center.setStyle("-fx-background-color:white;");
+        center.setBackground(new javafx.scene.layout.Background(new javafx.scene.layout.BackgroundFill(javafx.scene.paint.Color.WHITE, javafx.scene.layout.CornerRadii.EMPTY, javafx.geometry.Insets.EMPTY)));
 
         // ── Legend ────────────────────────────────────────
         HBox legend = new HBox(16,
@@ -93,14 +111,15 @@ public class ObserverView {
         );
         legend.setPadding(new Insets(8, 14, 8, 14));
         legend.setAlignment(Pos.CENTER_LEFT);
-        legend.setStyle("-fx-background-color:#eceff1;-fx-border-color:#cfd8dc;-fx-border-width:1 0 0 0;");
+        legend.setBackground(new javafx.scene.layout.Background(new javafx.scene.layout.BackgroundFill(Color.web("#f8f9fa"), javafx.scene.layout.CornerRadii.EMPTY, javafx.geometry.Insets.EMPTY)));
+        legend.setStyle("-fx-border-color:#e8eaed;-fx-border-width:1 0 0 0;");
 
         // ── Root ──────────────────────────────────────────
         BorderPane root = new BorderPane();
         root.setTop(header);
         root.setCenter(center);
         root.setBottom(legend);
-        root.setStyle("-fx-background-color:white;");
+        root.setBackground(new javafx.scene.layout.Background(new javafx.scene.layout.BackgroundFill(javafx.scene.paint.Color.WHITE, javafx.scene.layout.CornerRadii.EMPTY, javafx.geometry.Insets.EMPTY)));
 
         Scene scene = new Scene(root, CW, CH + 80);
         stage.setTitle("CY SafeCampus — Observation");
@@ -134,6 +153,7 @@ public class ObserverView {
         GraphicsContext gc = canvas.getGraphicsContext2D();
         Graph graph = controller.getGraph();
 
+        gc.clearRect(0, 0, CW, CH);
         gc.setFill(Color.WHITE);
         gc.fillRect(0, 0, CW, CH);
 
@@ -149,7 +169,10 @@ public class ObserverView {
                 if (rp == null) continue;
                 double density = p.getMaxCapacity() > 0
                     ? (double) p.getCurrentOccupancy() / p.getMaxCapacity() : 0;
-                gc.setStroke(density > 0.6 ? Color.web("#ffccbc") : Color.web("#bdbdbd"));
+                if (density < 0.4) gc.setStroke(Color.web("#bdbdbd"));
+                else if (density < 0.8) gc.setStroke(Color.web("#ffb74d"));
+                else gc.setStroke(Color.web("#ef5350"));
+                gc.setLineWidth(density > 0.4 ? 2.5 : 1.5);
                 gc.strokeLine(pp.getX(), pp.getY(), rp.getX(), rp.getY());
             }
         }
@@ -176,8 +199,8 @@ public class ObserverView {
         gc.setLineWidth(1.2);
 
         if (el instanceof Exit) {
-            gc.fillRoundRect(x-36, y-15, 72, 30, 10, 10);
-            gc.strokeRoundRect(x-36, y-15, 72, 30, 10, 10);
+            gc.fillRoundRect(x-46, y-16, 92, 32, 10, 10);
+            gc.strokeRoundRect(x-46, y-16, 92, 32, 10, 10);
         } else if (el instanceof Passage) {
             double[] xs = {x, x+26, x, x-26};
             double[] ys = {y-16, y, y+16, y};
@@ -188,10 +211,10 @@ public class ObserverView {
             gc.strokeOval(x-NR, y-NR, NR*2, NR*2);
         }
 
-        String name = el.getName().length() > 10
-            ? el.getName().substring(0, 9) + "…" : el.getName();
+        String name = el.getName().length() > 14
+            ? el.getName().substring(0, 13) + "…" : el.getName();
         gc.setFill(Color.WHITE);
-        gc.setFont(Font.font("Sans", FontWeight.BOLD, 10));
+        gc.setFont(Font.font("Sans", FontWeight.BOLD, 11));
         gc.fillText(name, x - name.length() * 2.8, y + 3);
 
         String occ = el.getCurrentOccupancy() + "/" + el.getMaxCapacity();
@@ -246,15 +269,15 @@ public class ObserverView {
     }
 
     private void initPositions() {
-        put("Réserve", 85, 60);   put("Bureau 1", 85, 155);
-        put("Bureau 2", 85, 250); put("Bureau 3", 85, 345);
-        put("Escalier 1", 215, 65); put("Couloir Nord", 320, 148);
-        put("LT Serveurs", 460, 90); put("Escalier 2", 385, 218);
-        put("Hall Central", 460, 305);
-        put("Sortie Ouest", 65, 430); put("Amphithéâtre", 205, 430);
-        put("Couloir Sud", 375, 430); put("Logement", 530, 430);
-        put("Sortie Est 1", 670, 205); put("Sortie Est 2", 670, 305);
-        put("Sortie Est 3", 670, 405);
+        put("Réserve", 120, 85);      put("Bureau 1", 120, 180);
+        put("Bureau 2", 120, 275);    put("Bureau 3", 120, 370);
+        put("Escalier 1", 265, 85);   put("Couloir Nord", 380, 175);
+        put("LT Serveurs", 540, 105); put("Escalier 2", 445, 255);
+        put("Hall Central", 540, 350);
+        put("Sortie Ouest", 85, 450);    put("Amphithéâtre", 245, 450);
+        put("Couloir Sud", 430, 450);    put("Logement", 600, 450);
+        put("Sortie Est 1", 700, 230);   put("Sortie Est 2", 700, 350);
+        put("Sortie Est 3", 700, 435);
     }
 
     private void put(String n, double x, double y) {
