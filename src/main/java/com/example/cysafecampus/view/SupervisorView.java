@@ -77,7 +77,7 @@ public class SupervisorView {
         occCard.setPadding(new Insets(20));
         occCard.setAlignment(Pos.CENTER);
         occCard.setStyle("-fx-background-color:white;-fx-border-color:#e0e0e0;" +
-            "-fx-border-radius:12;-fx-background-radius:12;");
+            "-fx-border-radius:12;-fx-background-radius:12;-fx-effect:dropshadow(gaussian,rgba(0,0,0,0.06),6,0,0,2);");
 
         // ── Order banner ──────────────────────────────────
         orderBanner = new Label("En attente d'un ordre...");
@@ -95,7 +95,7 @@ public class SupervisorView {
         VBox orderBox = new VBox(8, orderIcon, orderBanner, orderDetail);
         orderBox.setPadding(new Insets(20));
         orderBox.setAlignment(Pos.CENTER);
-        orderBox.setStyle("-fx-background-color:#f5f5f5;-fx-border-color:#e0e0e0;" +
+        orderBox.setStyle("-fx-background-color:#f8f9fa;-fx-border-color:#e8eaed;" +
             "-fx-border-radius:12;-fx-background-radius:12;");
 
         // ── Action button ─────────────────────────────────
@@ -133,12 +133,12 @@ public class SupervisorView {
         // ── Layout ────────────────────────────────────────
         VBox content = new VBox(14, occCard, orderBox, guideBtn, blockBtn);
         content.setPadding(new Insets(16));
-        content.setStyle("-fx-background-color:#fafafa;");
+        content.setBackground(new javafx.scene.layout.Background(new javafx.scene.layout.BackgroundFill(javafx.scene.paint.Color.WHITE, javafx.scene.layout.CornerRadii.EMPTY, javafx.geometry.Insets.EMPTY)));
 
         BorderPane root = new BorderPane();
         root.setTop(header);
         root.setCenter(content);
-        root.setStyle("-fx-background-color:#fafafa;");
+        root.setBackground(new javafx.scene.layout.Background(new javafx.scene.layout.BackgroundFill(javafx.scene.paint.Color.WHITE, javafx.scene.layout.CornerRadii.EMPTY, javafx.geometry.Insets.EMPTY)));
 
         // Mobile-like narrow window
         Scene scene = new Scene(root, 360, 580);
