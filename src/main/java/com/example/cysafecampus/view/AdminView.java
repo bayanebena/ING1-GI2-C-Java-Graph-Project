@@ -20,15 +20,20 @@ import javafx.util.Duration;
 
 import java.io.File;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
- * Admin view — full campus map, sensor alerts, evacuation controls, agent management.
+ * Admin view — full campus map with:
+ * - Click on node → statistics panel
+ * - Click on agent → highlighted remaining path
+ * - Real-time sensor log
+ * - Play/Pause/Step controls
  */
 public class AdminView {
 
-    private static final int CW = 700, CH = 460;
-    private static final double NR = 28;
+    private static final int CW = 720, CH = 480;
+    private static final double NR = 34;
 
     private final Stage stage;
     private final GraphController controller;
@@ -38,7 +43,17 @@ public class AdminView {
     private TextArea logArea;
     private Timeline uiRefresh;
 
+    // Selection state
+    private BuildingElement selectedNode = null;
+    private Agent selectedAgent = null;
+
+    // Stats panel labels
+    private Label statNameLbl, statOccLbl, statPassedLbl, statSpeedLbl, statStatusLbl;
+    private VBox statsPanel;
+
     private final Map<String, javafx.geometry.Point2D> pos = new HashMap<>();
+    /** true = fastest path (time+congestion), false = shortest path (distance) */
+    private boolean useFastestPath = false;
 
     public AdminView(Stage stage, GraphController controller) {
         this.stage = stage;
@@ -58,7 +73,6 @@ public class AdminView {
 
         Button backBtn = btn("← Retour", "#546e7a");
         backBtn.setOnAction(e -> goBack());
-
         Button saveBtn = btn("💾 Save", "#1565c0");
         Button loadBtn = btn("📂 Load", "#1565c0");
         saveBtn.setOnAction(e -> handleSave());
@@ -68,24 +82,84 @@ public class AdminView {
         HBox top = new HBox(10, backBtn, role, statusLbl, sp, saveBtn, loadBtn);
         top.setPadding(new Insets(8, 12, 8, 12));
         top.setAlignment(Pos.CENTER_LEFT);
-        top.setStyle("-fx-background-color:#e8eaf6;-fx-border-color:#c5cae9;-fx-border-width:0 0 1 0;");
+        top.setBackground(bg("#f8f9fa"));
+        top.setStyle("-fx-border-color:#e8eaed;-fx-border-width:0 0 1 0;");
 
-        // ── Canvas (campus map) ───────────────────────────
+        // ── Canvas ────────────────────────────────────────
         canvas = new Canvas(CW, CH);
+        setupMouseHandlers();
         setupContextMenu();
+        StackPane canvasPane = new StackPane(canvas);
+        canvasPane.setBackground(bg("white"));
 
         // ── Right panel ───────────────────────────────────
-        VBox rightPanel = new VBox(10);
-        rightPanel.setPadding(new Insets(10));
-        rightPanel.setPrefWidth(240);
-        rightPanel.setStyle("-fx-background-color:#f5f5f5;-fx-border-color:#e0e0e0;-fx-border-width:0 0 0 1;");
+        VBox rightPanel = buildRightPanel();
+        rightPanel.setPrefWidth(250);
+
+        // ── Bottom status ─────────────────────────────────
+        Label tickLbl = new Label("Tick: 0");
+        tickLbl.setStyle("-fx-font-size:11px;-fx-text-fill:#546e7a;");
+        Label agentCountLbl = new Label();
+        agentCountLbl.setStyle("-fx-font-size:11px;-fx-text-fill:#546e7a;");
+        Label clickHint = new Label("Clic sur nœud = stats · Clic sur agent = trajet");
+        clickHint.setStyle("-fx-font-size:10px;-fx-text-fill:#bdbdbd;-fx-font-style:italic;");
+
+        HBox statusBar = new HBox(20, tickLbl, agentCountLbl, clickHint);
+        statusBar.setPadding(new Insets(4, 12, 4, 12));
+        statusBar.setBackground(bg("#f8f9fa"));
+        statusBar.setStyle("-fx-border-color:#e8eaed;-fx-border-width:1 0 0 0;");
+
+        // ── Layout ────────────────────────────────────────
+        HBox center = new HBox(canvasPane, rightPanel);
+        HBox.setHgrow(canvasPane, Priority.ALWAYS);
+
+        BorderPane root = new BorderPane();
+        root.setTop(top);
+        root.setCenter(center);
+        root.setBottom(statusBar);
+        root.setBackground(bg("white"));
+
+        Scene scene = new Scene(root, CW + 250, CH + 72);
+        scene.setFill(Color.WHITE);
+        stage.setTitle("CY SafeCampus — Administration");
+        stage.setScene(scene);
+        stage.show();
+
+        // Wire sensor callback
+        controller.setSensorEventCallback(event -> javafx.application.Platform.runLater(() -> {
+            String icon = event.getSeverity() >= 4 ? "🔥" : event.getSeverity() >= 3 ? "⚠" : "ℹ";
+            log(icon + " [" + event.getType() + "] " + event.getLocation().getName()
+                + " — sévérité " + event.getSeverity());
+        }));
+
+        // Auto-refresh
+        uiRefresh = new Timeline(new KeyFrame(Duration.millis(150), e -> {
+            draw();
+            tickLbl.setText("Tick: " + controller.getTickCount());
+            agentCountLbl.setText("Agents: " + controller.getGraph().getAgents().size());
+            updateStatsPanel();
+        }));
+        uiRefresh.setCycleCount(Timeline.INDEFINITE);
+        uiRefresh.play();
+
+        log("Système démarré");
+        draw();
+    }
+
+    // ── Right Panel ───────────────────────────────────────
+
+    private VBox buildRightPanel() {
+        VBox panel = new VBox(10);
+        panel.setPadding(new Insets(12));
+        panel.setBackground(bg("#f8f9fa"));
+        panel.setStyle("-fx-border-color:#e8eaed;-fx-border-width:0 0 0 1;");
 
         // Simulation controls
-        Label ctrlTitle = sectionTitle("Simulation");
+        Label simTitle = sectionLbl("Simulation");
         playPauseBtn = btn("▶ Play", "#2e7d32");
         Button stepBtn = btn("⏭ Step", "#546e7a");
         Slider speedSlider = new Slider(50, 2000, 500);
-        speedSlider.setPrefWidth(200);
+        speedSlider.setPrefWidth(210);
         speedSlider.valueProperty().addListener((o, ov, nv) ->
             controller.setSpeed((int)(2050 - nv.doubleValue())));
         playPauseBtn.setOnAction(e -> {
@@ -96,15 +170,23 @@ public class AdminView {
             }
         });
         stepBtn.setOnAction(e -> { controller.step(); draw(); });
-
         HBox simBtns = new HBox(8, playPauseBtn, stepBtn);
+        javafx.scene.control.ToggleButton pathToggle =
+            new javafx.scene.control.ToggleButton("Chemin: Plus court");
+        pathToggle.setStyle("-fx-font-size:10px;-fx-padding:3 8;-fx-pref-width:210;");
+        pathToggle.setOnAction(e -> {
+            useFastestPath = pathToggle.isSelected();
+            pathToggle.setText(useFastestPath ? "Chemin: Plus rapide" : "Chemin: Plus court");
+            // Recompute all paths with new strategy
+            controller.getGraph().getAgents().forEach(a -> a.setPath(new java.util.ArrayList<>()));
+        });
 
-        // Alert controls
-        Label alertTitle = sectionTitle("Alertes");
+        // Alert
+        Label alertTitle = sectionLbl("Alertes");
         Button fireBtn = btn("🔥 Déclencher alarme", "#c62828");
         Button resetBtn = btn("↺ Reset", "#37474f");
-        fireBtn.setStyle(fireBtn.getStyle() + "-fx-pref-width:200;");
-        resetBtn.setStyle(resetBtn.getStyle() + "-fx-pref-width:200;");
+        fireBtn.setMaxWidth(Double.MAX_VALUE);
+        resetBtn.setMaxWidth(Double.MAX_VALUE);
         fireBtn.setOnAction(e -> {
             controller.triggerFireAlert();
             statusLbl.setText("🔥 ALERTE");
@@ -118,93 +200,75 @@ public class AdminView {
             statusLbl.setStyle("-fx-background-color:#2e7d32;-fx-text-fill:white;" +
                 "-fx-padding:3 10;-fx-background-radius:5;-fx-font-weight:bold;");
             playPauseBtn.setText("▶ Play");
+            selectedAgent = null; selectedNode = null;
             log("Simulation réinitialisée");
         });
 
-        // Agent management
-        Label agentTitle = sectionTitle("Agents");
-        Button addAgentBtn  = btn("+ Ajouter agent",    "#1565c0");
-        Button rmAgentBtn   = btn("- Supprimer agent",  "#546e7a");
-        Button rndAgentsBtn = btn("⚡ X agents aléat.", "#6a1b9a");
-        addAgentBtn.setStyle(addAgentBtn.getStyle()   + "-fx-pref-width:200;");
-        rmAgentBtn.setStyle(rmAgentBtn.getStyle()     + "-fx-pref-width:200;");
-        rndAgentsBtn.setStyle(rndAgentsBtn.getStyle() + "-fx-pref-width:200;");
+        // Agents
+        Label agentTitle = sectionLbl("Agents");
+        Button addAgentBtn  = btn("+ Ajouter agent",     "#1565c0");
+        Button rmAgentBtn   = btn("- Supprimer agent",   "#546e7a");
+        Button rndAgentsBtn = btn("⚡ X agents aléat.",  "#6a1b9a");
+        addAgentBtn.setMaxWidth(Double.MAX_VALUE);
+        rmAgentBtn.setMaxWidth(Double.MAX_VALUE);
+        rndAgentsBtn.setMaxWidth(Double.MAX_VALUE);
+        Button editAgentBtn = btn("✏ Modifier agent", "#0277bd");
+        editAgentBtn.setMaxWidth(Double.MAX_VALUE);
+        editAgentBtn.setOnAction(e -> handleEditAgent());
         addAgentBtn.setOnAction(e  -> handleAddAgent());
         rmAgentBtn.setOnAction(e   -> handleRemoveAgent());
         rndAgentsBtn.setOnAction(e -> handleRandomAgents());
 
-        // Event log
-        Label logTitle = sectionTitle("Journal");
+        // Stats panel (shown on node/agent click)
+        Label statsTitle = sectionLbl("Sélection");
+        statNameLbl   = new Label("—");
+        statNameLbl.setFont(Font.font("Sans", FontWeight.BOLD, 12));
+        statOccLbl    = infoLbl("Occupation: —");
+        statPassedLbl = infoLbl("Agents passés: —");
+        statSpeedLbl  = infoLbl("Vitesse moy.: —");
+        statStatusLbl = infoLbl("Statut: —");
+        statsPanel = new VBox(4, statNameLbl, statOccLbl,
+            statPassedLbl, statSpeedLbl, statStatusLbl);
+        statsPanel.setPadding(new Insets(8));
+        statsPanel.setStyle("-fx-background-color:white;-fx-border-color:#e0e0e0;" +
+            "-fx-border-radius:6;-fx-background-radius:6;");
+
+        // Log
+        Label logTitle = sectionLbl("Journal capteurs");
         logArea = new TextArea();
         logArea.setEditable(false);
-        logArea.setPrefRowCount(6);
+        logArea.setPrefRowCount(5);
         logArea.setStyle("-fx-font-size:10px;-fx-font-family:monospace;");
-        log("Système démarré");
-
-        // Wire sensor event callback — logs real-time alerts
-        controller.setSensorEventCallback(event -> {
-            javafx.application.Platform.runLater(() -> {
-                String severity = "⚠";
-                if (event.getSeverity() >= 4) severity = "🔥";
-                else if (event.getSeverity() >= 3) severity = "⚠";
-                else severity = "ℹ";
-                log(severity + " [" + event.getType() + "] "
-                    + event.getLocation().getName()
-                    + " — sévérité " + event.getSeverity());
-            });
-        });
 
         // Legend
-        Label legTitle = sectionTitle("Légende");
-        VBox legend = new VBox(4,
+        Label legTitle = sectionLbl("Légende");
+        VBox legend = new VBox(3,
             legendRow(Color.web("#1b5e20"), "Vide (< 40%)"),
             legendRow(Color.web("#e65100"), "Dense (40-80%)"),
             legendRow(Color.web("#b71c1c"), "Saturé (> 80%)"),
             legendRow(Color.web("#0d47a1"), "Sortie"),
-            legendRow(Color.web("#283593"), "Couloir/Passage")
+            legendRow(Color.web("#283593"), "Couloir"),
+            legendRow(Color.web("#1565c0"), "Agent calme"),
+            legendRow(Color.web("#f44336"), "Agent paniqué")
         );
 
-        rightPanel.getChildren().addAll(
-            ctrlTitle, simBtns, new Label("Vitesse:"), speedSlider,
+        panel.getChildren().addAll(
+            simTitle, simBtns, new Label("Vitesse:"), speedSlider, pathToggle,
             new Separator(), alertTitle, fireBtn, resetBtn,
-            new Separator(), agentTitle, addAgentBtn, rmAgentBtn, rndAgentsBtn,
+            new Separator(), agentTitle, addAgentBtn, editAgentBtn, rmAgentBtn, rndAgentsBtn,
+            new Separator(), statsTitle, statsPanel,
             new Separator(), logTitle, logArea,
             new Separator(), legTitle, legend
         );
 
-        // ── Bottom status bar ─────────────────────────────
-        Label tickLbl = new Label("Tick: 0");
-        tickLbl.setStyle("-fx-font-size:11px;-fx-text-fill:#546e7a;");
-        Label agentCountLbl = new Label();
-        agentCountLbl.setStyle("-fx-font-size:11px;-fx-text-fill:#546e7a;");
+        ScrollPane scroll = new ScrollPane(panel);
+        scroll.setFitToWidth(true);
+        scroll.setBackground(bg("#f8f9fa"));
+        scroll.setPrefWidth(250);
 
-        HBox statusBar = new HBox(20, tickLbl, agentCountLbl);
-        statusBar.setPadding(new Insets(4, 12, 4, 12));
-        statusBar.setStyle("-fx-background-color:#e8eaf6;-fx-border-color:#c5cae9;-fx-border-width:1 0 0 0;");
-
-        // ── Layout ────────────────────────────────────────
-        HBox center = new HBox(canvas, rightPanel);
-        BorderPane root = new BorderPane();
-        root.setTop(top);
-        root.setCenter(center);
-        root.setBottom(statusBar);
-        root.setStyle("-fx-background-color:white;");
-
-        Scene scene = new Scene(root, CW + 240, CH + 80);
-        stage.setTitle("CY SafeCampus — Administration");
-        stage.setScene(scene);
-        stage.show();
-
-        // UI auto-refresh every 200ms
-        uiRefresh = new Timeline(new KeyFrame(Duration.millis(200), e -> {
-            draw();
-            tickLbl.setText("Tick: " + controller.getTickCount());
-            agentCountLbl.setText("Agents: " + controller.getGraph().getAgents().size());
-        }));
-        uiRefresh.setCycleCount(Timeline.INDEFINITE);
-        uiRefresh.play();
-
-        draw();
+        VBox wrapper = new VBox(scroll);
+        VBox.setVgrow(scroll, Priority.ALWAYS);
+        return wrapper;
     }
 
     // ── Draw ──────────────────────────────────────────────
@@ -213,11 +277,11 @@ public class AdminView {
         GraphicsContext gc = canvas.getGraphicsContext2D();
         Graph graph = controller.getGraph();
 
+        gc.clearRect(0, 0, CW, CH);
         gc.setFill(Color.WHITE);
         gc.fillRect(0, 0, CW, CH);
 
-        // Edges
-        gc.setLineWidth(1.5);
+        // ── Edges ─────────────────────────────────────────
         for (Passage p : graph.getPassages()) {
             if (p.getName().contains("↔")) continue;
             javafx.geometry.Point2D pp = pos.get(p.getName());
@@ -226,38 +290,63 @@ public class AdminView {
                 if (d.getRoom().getName().contains("↔")) continue;
                 javafx.geometry.Point2D rp = pos.get(d.getRoom().getName());
                 if (rp == null) continue;
-                gc.setStroke(Color.web("#bdbdbd"));
+
+                double density = p.getMaxCapacity() > 0
+                    ? (double) p.getCurrentOccupancy() / p.getMaxCapacity() : 0;
+                // Gradient edge color by density
+                if (density < 0.4) gc.setStroke(Color.web("#bdbdbd"));
+                else if (density < 0.8) gc.setStroke(Color.web("#ffb74d"));
+                else gc.setStroke(Color.web("#ef5350"));
+                gc.setLineWidth(density > 0.4 ? 2.5 : 1.5);
                 gc.strokeLine(pp.getX(), pp.getY(), rp.getX(), rp.getY());
             }
         }
 
-        // Nodes
+        // ── Selected agent path highlight ─────────────────
+        if (selectedAgent != null && selectedAgent.getPath() != null) {
+            List<BuildingElement> path = selectedAgent.getPath();
+            gc.setStroke(Color.web("#ff9800"));
+            gc.setLineWidth(3.5);
+            gc.setLineDashes(8, 4);
+            for (int i = selectedAgent.getPathIndex(); i < path.size() - 1; i++) {
+                javafx.geometry.Point2D a = pos.get(path.get(i).getName());
+                javafx.geometry.Point2D b = pos.get(path.get(i+1).getName());
+                if (a != null && b != null) gc.strokeLine(a.getX(), a.getY(), b.getX(), b.getY());
+            }
+            gc.setLineDashes(0);
+        }
+
+        // ── Nodes ─────────────────────────────────────────
         for (BuildingElement el : graph.getElements()) {
             if (el.getName().contains("↔")) continue;
             javafx.geometry.Point2D p = pos.get(el.getName());
             if (p == null) continue;
-            drawNode(gc, el, p.getX(), p.getY());
+            boolean selected = el.equals(selectedNode);
+            drawNode(gc, el, p.getX(), p.getY(), selected);
         }
 
-        // Agents
+        // ── Agents ────────────────────────────────────────
         for (Agent a : graph.getAgents()) {
             javafx.geometry.Point2D p = agentPos(a);
-            if (p != null) drawAgent(gc, p.getX(), p.getY(), a);
+            if (p != null) drawAgent(gc, p.getX(), p.getY(), a, a.equals(selectedAgent));
         }
     }
 
-    private void drawNode(GraphicsContext gc, BuildingElement el, double x, double y) {
+    private void drawNode(GraphicsContext gc, BuildingElement el, double x, double y, boolean selected) {
         Color fill = nodeColor(el);
+        Color stroke = selected ? Color.web("#ff9800") : Color.web("#9e9e9e");
+        double strokeW = selected ? 3.0 : 1.2;
+
         gc.setFill(fill);
-        gc.setStroke(Color.web("#9e9e9e"));
-        gc.setLineWidth(1.2);
+        gc.setStroke(stroke);
+        gc.setLineWidth(strokeW);
 
         if (el instanceof Exit) {
-            gc.fillRoundRect(x-34, y-14, 68, 28, 10, 10);
-            gc.strokeRoundRect(x-34, y-14, 68, 28, 10, 10);
+            gc.fillRoundRect(x-46, y-16, 92, 32, 10, 10);
+            gc.strokeRoundRect(x-46, y-16, 92, 32, 10, 10);
         } else if (el instanceof Passage) {
-            double[] xs = {x, x+24, x, x-24};
-            double[] ys = {y-15, y, y+15, y};
+            double[] xs = {x, x+26, x, x-26};
+            double[] ys = {y-16, y, y+16, y};
             gc.fillPolygon(xs, ys, 4);
             gc.strokePolygon(xs, ys, 4);
         } else {
@@ -265,32 +354,103 @@ public class AdminView {
             gc.strokeOval(x-NR, y-NR, NR*2, NR*2);
         }
 
-        // Label
-        String name = el.getName().length() > 10
-            ? el.getName().substring(0, 9) + "…" : el.getName();
+        String name = el.getName().length() > 14
+            ? el.getName().substring(0, 13) + "…" : el.getName();
         gc.setFill(Color.WHITE);
-        gc.setFont(Font.font("Sans", FontWeight.BOLD, 10));
-        gc.fillText(name, x - name.length() * 2.8, y + 3);
+        gc.setFont(Font.font("Sans", FontWeight.BOLD, 11));
+        gc.fillText(name, x - name.length() * 3.0, y + 3);
 
-        // Occupancy
+        // Occupancy below
         String occ = el.getCurrentOccupancy() + "/" + el.getMaxCapacity();
         gc.setFill(Color.web("#eeeeee"));
         gc.setFont(Font.font("Sans", 8));
-        gc.fillText(occ, x - occ.length() * 2, y + (el instanceof Exit ? 22 : NR + 10));
+        gc.fillText(occ, x - occ.length() * 2.2,
+            y + (el instanceof Exit ? 24 : NR + 11));
     }
 
-    private void drawAgent(GraphicsContext gc, double x, double y, Agent a) {
+    private void drawAgent(GraphicsContext gc, double x, double y, Agent a, boolean selected) {
         Color c = a.getState() == AgentState.PANICKED
             ? Color.web("#f44336") : Color.web("#1565c0");
-        gc.setStroke(c); gc.setFill(c); gc.setLineWidth(1.5);
-        gc.fillOval(x-3, y-12, 7, 7);
-        gc.strokeLine(x, y-5, x, y+5);
-        gc.strokeLine(x-4, y-1, x+4, y-1);
-        gc.strokeLine(x, y+5, x-3, y+11);
-        gc.strokeLine(x, y+5, x+3, y+11);
+        if (selected) {
+            gc.setFill(Color.web("#ff980066"));
+            gc.fillOval(x - 14, y - 18, 28, 28);
+        }
+        gc.setStroke(c); gc.setFill(c); gc.setLineWidth(1.8);
+        gc.fillOval(x-4, y-13, 8, 8);
+        gc.strokeLine(x, y-5, x, y+6);
+        gc.strokeLine(x-5, y, x+5, y);
+        gc.strokeLine(x, y+6, x-4, y+13);
+        gc.strokeLine(x, y+6, x+4, y+13);
     }
 
+    // ── Mouse handlers ────────────────────────────────────
+
+    private void setupMouseHandlers() {
+        canvas.setOnMouseClicked(e -> {
+            double mx = e.getX(), my = e.getY();
+
+            // Check agent click first (smaller hit target)
+            Agent clickedAgent = null;
+            for (Agent a : controller.getGraph().getAgents()) {
+                javafx.geometry.Point2D p = agentPos(a);
+                if (p != null && Math.hypot(p.getX() - mx, p.getY() - my) < 14) {
+                    clickedAgent = a;
+                    break;
+                }
+            }
+
+            if (clickedAgent != null) {
+                selectedAgent = (selectedAgent == clickedAgent) ? null : clickedAgent;
+                selectedNode = null;
+                draw();
+                return;
+            }
+
+            // Check node click
+            BuildingElement clickedNode = null;
+            for (BuildingElement el : controller.getGraph().getElements()) {
+                if (el.getName().contains("↔")) continue;
+                javafx.geometry.Point2D p = pos.get(el.getName());
+                if (p == null) continue;
+                double dist = Math.hypot(p.getX() - mx, p.getY() - my);
+                if (dist < NR + 8) { clickedNode = el; break; }
+            }
+
+            selectedNode = (selectedNode == clickedNode) ? null : clickedNode;
+            selectedAgent = null;
+            draw();
+        });
+    }
+
+    private void updateStatsPanel() {
+        if (selectedNode != null) {
+            statNameLbl.setText(selectedNode.getName());
+            statOccLbl.setText("Occupation: " + selectedNode.getCurrentOccupancy()
+                + " / " + selectedNode.getMaxCapacity());
+            statPassedLbl.setText("Agents passés: " + selectedNode.getTotalAgentsPassed());
+            statSpeedLbl.setText(String.format("Vitesse moy.: %.2f", selectedNode.getAverageSpeed()));
+            statStatusLbl.setText("Statut: " + selectedNode.getStatus());
+        } else if (selectedAgent != null) {
+            statNameLbl.setText(selectedAgent.getName());
+            statOccLbl.setText("État: " + selectedAgent.getState());
+            int remaining = selectedAgent.getPath() == null ? 0
+                : Math.max(0, selectedAgent.getPath().size() - selectedAgent.getPathIndex() - 1);
+            statPassedLbl.setText("Étapes restantes: " + remaining);
+            statSpeedLbl.setText(String.format("Vitesse: %.1f", selectedAgent.getMaxSpeed()));
+            statStatusLbl.setText("Comportement: " + selectedAgent.getBehavior());
+        } else {
+            statNameLbl.setText("—");
+            statOccLbl.setText("Occupation: —");
+            statPassedLbl.setText("Agents passés: —");
+            statSpeedLbl.setText("Vitesse moy.: —");
+            statStatusLbl.setText("Statut: —");
+        }
+    }
+
+    // ── Agent position ────────────────────────────────────
+
     private javafx.geometry.Point2D agentPos(Agent a) {
+        if (a.getCurrentLocation() == null) return null;
         javafx.geometry.Point2D base = pos.get(a.getCurrentLocation().getName());
         if (base == null) return null;
         BuildingElement next = a.getNextInPath();
@@ -299,12 +459,13 @@ public class AdminView {
             if (np != null) {
                 double t = a.getProgress();
                 return new javafx.geometry.Point2D(
-                    base.getX() + (np.getX()-base.getX())*t,
-                    base.getY() + (np.getY()-base.getY())*t);
+                    base.getX() + (np.getX() - base.getX()) * t,
+                    base.getY() + (np.getY() - base.getY()) * t);
             }
         }
         int h = Math.abs(a.getId().hashCode());
-        return new javafx.geometry.Point2D(base.getX()+(h%18)-9, base.getY()+((h/18)%14)-7);
+        return new javafx.geometry.Point2D(base.getX() + (h % 18) - 9,
+            base.getY() + ((h / 18) % 14) - 7);
     }
 
     private Color nodeColor(BuildingElement el) {
@@ -318,27 +479,202 @@ public class AdminView {
         return Color.web("#b71c1c");
     }
 
-    // ── Helpers ───────────────────────────────────────────
+    // ── Context menu ──────────────────────────────────────
 
-    private void log(String msg) {
-        if (logArea != null) {
-            logArea.appendText(msg + "\n");
-            logArea.setScrollTop(Double.MAX_VALUE);
-        }
+    private void setupContextMenu() {
+        ContextMenu menu = new ContextMenu();
+        MenuItem addN = new MenuItem("Ajouter un nœud");
+        MenuItem rmN  = new MenuItem("Supprimer un nœud");
+        MenuItem editN = new MenuItem("Modifier un nœud");
+        MenuItem moveN = new MenuItem("Déplacer un nœud");
+        MenuItem addE = new MenuItem("Ajouter une arête");
+        MenuItem editE = new MenuItem("Modifier une arête");
+        MenuItem rmE  = new MenuItem("Supprimer une arête");
+        MenuItem rndN = new MenuItem("X nœuds aléatoires");
+        menu.getItems().addAll(addN, editN, rmN, moveN,
+            new SeparatorMenuItem(), addE, editE, rmE, new SeparatorMenuItem(), rndN);
+        addN.setOnAction(e -> handleAddNode());
+        editN.setOnAction(e -> handleEditNode());
+        rmN.setOnAction(e  -> handleRemoveNode());
+        moveN.setOnAction(e -> handleMoveNode());
+        addE.setOnAction(e -> handleAddEdge());
+        editE.setOnAction(e -> handleEditEdge());
+        rmE.setOnAction(e  -> handleRemoveEdge());
+        rndN.setOnAction(e -> handleAddRandomNodes());
+        canvas.setOnContextMenuRequested(e ->
+            menu.show(canvas, e.getScreenX(), e.getScreenY()));
     }
 
-    private void handleSave() {
-        FileChooser fc = new FileChooser();
-        fc.getExtensionFilters().add(new FileChooser.ExtensionFilter("*.bin", "*.bin"));
-        File f = fc.showSaveDialog(stage);
-        if (f != null) { controller.saveSimulation(f.getAbsolutePath()); log("Sauvegardé: " + f.getName()); }
+    // ── Handlers ──────────────────────────────────────────
+
+    private void handleAddNode() {
+        TextField nameF = new TextField(), xF = new TextField("350"), yF = new TextField("240");
+        ComboBox<String> typeB = new ComboBox<>();
+        typeB.getItems().addAll("Salle", "Sortie", "Couloir"); typeB.getSelectionModel().selectFirst();
+        dialog("Ajouter un nœud", grid("Nom:", nameF, "Type:", typeB, "X:", xF, "Y:", yF), () -> {
+            try {
+                String n = nameF.getText().trim();
+                if (n.isEmpty()) { showErr("Nom vide"); return; }
+                double x = Double.parseDouble(xF.getText()), y = Double.parseDouble(yF.getText());
+                controller.addNode(n, typeB.getValue(), x, y);
+                pos.put(n, new javafx.geometry.Point2D(x, y));
+                draw();
+            } catch (Exception ex) { showErr("Invalide"); }
+        });
     }
 
-    private void handleLoad() {
-        FileChooser fc = new FileChooser();
-        fc.getExtensionFilters().add(new FileChooser.ExtensionFilter("*.bin", "*.bin"));
-        File f = fc.showOpenDialog(stage);
-        if (f != null) { controller.loadSimulation(f.getAbsolutePath()); log("Chargé: " + f.getName()); draw(); }
+    private void handleEditNode() {
+        ComboBox<String> nb = nodeCombo();
+        TextField nameF = new TextField(), capF = new TextField();
+        dialog("Modifier un nœud", grid("Nœud:", nb, "Nouveau nom:", nameF, "Capacité:", capF), () -> {
+            try {
+                String old = nb.getValue(), newN = nameF.getText().trim();
+                if (old == null || newN.isEmpty()) { showErr("Invalide"); return; }
+                int cap = Integer.parseInt(capF.getText());
+                javafx.geometry.Point2D p = pos.remove(old);
+                controller.updateNode(old, newN, cap);
+                if (p != null) pos.put(newN, p);
+                draw();
+            } catch (Exception ex) { showErr("Invalide"); }
+        });
+    }
+
+    private void handleRemoveNode() {
+        ComboBox<String> nb = nodeCombo();
+        dialog("Supprimer un nœud", grid("Nœud:", nb), () -> {
+            if (nb.getValue() != null) {
+                controller.removeNode(nb.getValue());
+                pos.remove(nb.getValue());
+                selectedNode = null; draw();
+            }
+        });
+    }
+
+    private void handleMoveNode() {
+        ComboBox<String> nb = new ComboBox<>();
+        pos.keySet().stream().filter(k -> !k.contains("↔")).forEach(nb.getItems()::add);
+        nb.getSelectionModel().selectFirst();
+        TextField xF = new TextField(), yF = new TextField();
+        dialog("Déplacer un nœud", grid("Nœud:", nb, "X:", xF, "Y:", yF), () -> {
+            try {
+                pos.put(nb.getValue(),
+                    new javafx.geometry.Point2D(Double.parseDouble(xF.getText()),
+                        Double.parseDouble(yF.getText())));
+                draw();
+            } catch (Exception ex) { showErr("Coordonnées invalides"); }
+        });
+    }
+
+    private void handleEditEdge() {
+        // Edit edge = modify the passage properties (distance, speedFactor, lanes)
+        ComboBox<String> passB = new ComboBox<>();
+        controller.getGraph().getPassages().stream()
+            .filter(p -> !p.getName().contains("↔"))
+            .forEach(p -> passB.getItems().add(p.getName()));
+        passB.getSelectionModel().selectFirst();
+        TextField distF = new TextField(), speedF = new TextField(), lanesF = new TextField();
+
+        passB.setOnAction(e -> {
+            controller.getGraph().getPassages().stream()
+                .filter(p -> p.getName().equals(passB.getValue()))
+                .findFirst().ifPresent(p -> {
+                    distF.setText(String.valueOf(p.getDistance()));
+                    speedF.setText(String.valueOf(p.getSpeedFactor()));
+                    lanesF.setText(String.valueOf(p.getLanes()));
+                });
+        });
+        if (!passB.getItems().isEmpty()) passB.fireEvent(new javafx.event.ActionEvent());
+
+        dialog("Modifier une arête (passage)",
+            grid("Passage:", passB, "Distance:", distF,
+                "Facteur vitesse:", speedF, "Couloirs (lanes):", lanesF), () -> {
+            try {
+                controller.getGraph().getPassages().stream()
+                    .filter(p -> p.getName().equals(passB.getValue()))
+                    .findFirst().ifPresent(p -> {
+                        p.setDistance(Double.parseDouble(distF.getText()));
+                        p.setSpeedFactor(Double.parseDouble(speedF.getText()));
+                        p.setLanes(Integer.parseInt(lanesF.getText()));
+                    });
+                log("Arête modifiée: " + passB.getValue());
+                draw();
+            } catch (Exception ex) { showErr("Valeurs invalides"); }
+        });
+    }
+
+    private void handleAddEdge() {
+        ComboBox<String> rB = new ComboBox<>(), pB = new ComboBox<>();
+        controller.getGraph().getElements().forEach(el -> {
+            if (el instanceof Room && !el.getName().contains("↔")) rB.getItems().add(el.getName());
+            if (el instanceof Passage && !el.getName().contains("↔")) pB.getItems().add(el.getName());
+        });
+        rB.getSelectionModel().selectFirst(); pB.getSelectionModel().selectFirst();
+        dialog("Ajouter arête", grid("Salle:", rB, "Couloir:", pB), () -> {
+            controller.addEdge(rB.getValue(), pB.getValue()); draw();
+        });
+    }
+
+    private void handleRemoveEdge() {
+        ComboBox<String> eB = new ComboBox<>();
+        controller.getGraph().getPassages().forEach(p ->
+            p.getConnectedDoors().stream().filter(d -> !d.getRoom().getName().contains("↔"))
+                .forEach(d -> eB.getItems().add(d.getRoom().getName() + " → " + p.getName())));
+        eB.getSelectionModel().selectFirst();
+        dialog("Supprimer arête", grid("Arête:", eB), () -> {
+            if (eB.getValue() != null) {
+                String[] parts = eB.getValue().split(" → ");
+                controller.removeEdge(parts[0], parts[1]); draw();
+            }
+        });
+    }
+
+    private void handleAddRandomNodes() {
+        TextField countF = new TextField("5");
+        dialog("Nœuds aléatoires", grid("Nombre:", countF), () -> {
+            try {
+                controller.addRandomNodes(Integer.parseInt(countF.getText().trim()));
+                controller.getGraph().getElements().forEach(el -> pos.computeIfAbsent(
+                    el.getName(), k -> new javafx.geometry.Point2D(
+                        80 + Math.random() * 560, 50 + Math.random() * 380)));
+                draw();
+            } catch (Exception ex) { showErr("Nombre invalide"); }
+        });
+    }
+
+    private void handleEditAgent() {
+        ComboBox<String> agB = agentCombo();
+        TextField nameF = new TextField(), speedF = new TextField(), tolF = new TextField();
+        ComboBox<String> locB = nodeCombo();
+        ComboBox<Behavior> behB = new ComboBox<>();
+        behB.getItems().addAll(Behavior.values()); behB.getSelectionModel().selectFirst();
+
+        // Pre-fill fields when agent selected
+        agB.setOnAction(e -> {
+            controller.getGraph().getAgents().stream()
+                .filter(a -> a.getName().equals(agB.getValue()))
+                .findFirst().ifPresent(a -> {
+                    nameF.setText(a.getName());
+                    speedF.setText(String.valueOf(a.getMaxSpeed()));
+                    tolF.setText(String.valueOf(a.getDensityTolerance()));
+                    locB.setValue(a.getCurrentLocation().getName());
+                    behB.setValue(a.getBehavior());
+                });
+        });
+        // Trigger pre-fill for first item
+        if (!agB.getItems().isEmpty()) agB.fireEvent(
+            new javafx.event.ActionEvent());
+
+        dialog("Modifier un agent",
+            grid("Agent:", agB, "Nouveau nom:", nameF, "Position:", locB,
+                "Vitesse:", speedF, "Tolérance:", tolF, "Comportement:", behB), () -> {
+            try {
+                controller.updateAgent(agB.getValue(), nameF.getText().trim(),
+                    locB.getValue(), Double.parseDouble(speedF.getText()),
+                    behB.getValue(), Double.parseDouble(tolF.getText()));
+                log("Agent modifié: " + nameF.getText().trim());
+                draw();
+            } catch (Exception ex) { showErr("Valeurs invalides"); }
+        });
     }
 
     private void handleAddAgent() {
@@ -347,21 +683,26 @@ public class AdminView {
         ComboBox<Behavior> behB = new ComboBox<>();
         behB.getItems().addAll(Behavior.values()); behB.getSelectionModel().selectFirst();
         dialog("Ajouter un agent",
-            grid("Nom:", nameF, "Position:", locB, "Vitesse:", speedF, "Tolérance:", tolF, "Comportement:", behB),
-            () -> {
-                try {
-                    controller.addPersonAgent(nameF.getText().trim(), locB.getValue(),
-                        Double.parseDouble(speedF.getText()), behB.getValue(),
-                        Double.parseDouble(tolF.getText()));
-                    log("Agent ajouté: " + nameF.getText().trim());
-                } catch (Exception ex) { showErr("Valeurs invalides"); }
-            });
+            grid("Nom:", nameF, "Position:", locB, "Vitesse:", speedF,
+                "Tolérance:", tolF, "Comportement:", behB), () -> {
+            try {
+                controller.addPersonAgent(nameF.getText().trim(), locB.getValue(),
+                    Double.parseDouble(speedF.getText()), behB.getValue(),
+                    Double.parseDouble(tolF.getText()));
+                log("Agent ajouté: " + nameF.getText().trim());
+            } catch (Exception ex) { showErr("Valeurs invalides"); }
+        });
     }
 
     private void handleRemoveAgent() {
         ComboBox<String> agB = agentCombo();
         dialog("Supprimer un agent", grid("Agent:", agB), () -> {
-            if (agB.getValue() != null) { controller.removeAgent(agB.getValue()); log("Agent supprimé: " + agB.getValue()); }
+            if (agB.getValue() != null) {
+                controller.removeAgent(agB.getValue());
+                if (selectedAgent != null && selectedAgent.getName().equals(agB.getValue()))
+                    selectedAgent = null;
+                log("Agent supprimé: " + agB.getValue());
+            }
         });
     }
 
@@ -381,67 +722,18 @@ public class AdminView {
         });
     }
 
-    private void setupContextMenu() {
-        ContextMenu menu = new ContextMenu();
-        MenuItem addN = new MenuItem("Ajouter un nœud");
-        MenuItem rmN  = new MenuItem("Supprimer un nœud");
-        MenuItem addE = new MenuItem("Ajouter une arête");
-        MenuItem rmE  = new MenuItem("Supprimer une arête");
-        menu.getItems().addAll(addN, rmN, new SeparatorMenuItem(), addE, rmE);
-        addN.setOnAction(e -> handleAddNode());
-        rmN.setOnAction(e  -> handleRemoveNode());
-        addE.setOnAction(e -> handleAddEdge());
-        rmE.setOnAction(e  -> handleRemoveEdge());
-        canvas.setOnContextMenuRequested(e -> menu.show(canvas, e.getScreenX(), e.getScreenY()));
+    private void handleSave() {
+        FileChooser fc = new FileChooser();
+        fc.getExtensionFilters().add(new FileChooser.ExtensionFilter("*.bin", "*.bin"));
+        File f = fc.showSaveDialog(stage);
+        if (f != null) { controller.saveSimulation(f.getAbsolutePath()); log("Sauvegardé"); }
     }
 
-    private void handleAddNode() {
-        TextField nameF = new TextField(), xF = new TextField("300"), yF = new TextField("230");
-        ComboBox<String> typeB = new ComboBox<>();
-        typeB.getItems().addAll("Salle", "Sortie", "Couloir"); typeB.getSelectionModel().selectFirst();
-        dialog("Ajouter un nœud", grid("Nom:", nameF, "Type:", typeB, "X:", xF, "Y:", yF), () -> {
-            try {
-                String n = nameF.getText().trim();
-                if (n.isEmpty()) { showErr("Nom vide"); return; }
-                double x = Double.parseDouble(xF.getText()), y = Double.parseDouble(yF.getText());
-                controller.addNode(n, typeB.getValue(), x, y);
-                pos.put(n, new javafx.geometry.Point2D(x, y));
-                draw();
-            } catch (Exception ex) { showErr("Invalide"); }
-        });
-    }
-
-    private void handleRemoveNode() {
-        ComboBox<String> nb = nodeCombo();
-        dialog("Supprimer un nœud", grid("Nœud:", nb), () -> {
-            if (nb.getValue() != null) { controller.removeNode(nb.getValue()); pos.remove(nb.getValue()); draw(); }
-        });
-    }
-
-    private void handleAddEdge() {
-        ComboBox<String> rB = new ComboBox<>(), pB = new ComboBox<>();
-        controller.getGraph().getElements().forEach(el -> {
-            if (el instanceof Room && !el.getName().contains("↔")) rB.getItems().add(el.getName());
-            if (el instanceof Passage && !el.getName().contains("↔")) pB.getItems().add(el.getName());
-        });
-        rB.getSelectionModel().selectFirst(); pB.getSelectionModel().selectFirst();
-        dialog("Ajouter une arête", grid("Salle:", rB, "Couloir:", pB), () -> {
-            controller.addEdge(rB.getValue(), pB.getValue()); draw();
-        });
-    }
-
-    private void handleRemoveEdge() {
-        ComboBox<String> eB = new ComboBox<>();
-        controller.getGraph().getPassages().forEach(p ->
-            p.getConnectedDoors().stream().filter(d -> !d.getRoom().getName().contains("↔"))
-                .forEach(d -> eB.getItems().add(d.getRoom().getName() + " → " + p.getName())));
-        eB.getSelectionModel().selectFirst();
-        dialog("Supprimer une arête", grid("Arête:", eB), () -> {
-            if (eB.getValue() != null) {
-                String[] parts = eB.getValue().split(" → ");
-                controller.removeEdge(parts[0], parts[1]); draw();
-            }
-        });
+    private void handleLoad() {
+        FileChooser fc = new FileChooser();
+        fc.getExtensionFilters().add(new FileChooser.ExtensionFilter("*.bin", "*.bin"));
+        File f = fc.showOpenDialog(stage);
+        if (f != null) { controller.loadSimulation(f.getAbsolutePath()); log("Chargé"); draw(); }
     }
 
     private void goBack() {
@@ -450,20 +742,30 @@ public class AdminView {
         new LoginView(stage, controller).show();
     }
 
+    // ── UI helpers ────────────────────────────────────────
+
+    private void log(String msg) {
+        if (logArea != null) {
+            logArea.appendText(msg + "\n");
+            logArea.setScrollTop(Double.MAX_VALUE);
+        }
+    }
+
     private void initPositions() {
-        put("Réserve", 80, 60); put("Bureau 1", 80, 155); put("Bureau 2", 80, 250);
-        put("Bureau 3", 80, 345); put("Escalier 1", 210, 65); put("Couloir Nord", 310, 145);
-        put("LT Serveurs", 440, 90); put("Escalier 2", 370, 215); put("Hall Central", 440, 300);
-        put("Sortie Ouest", 60, 420); put("Amphithéâtre", 195, 420); put("Couloir Sud", 360, 420);
-        put("Logement", 510, 420); put("Sortie Est 1", 640, 200); put("Sortie Est 2", 640, 300);
-        put("Sortie Est 3", 640, 400);
+        put("Réserve", 110, 80);      put("Bureau 1", 110, 175);
+        put("Bureau 2", 110, 270);    put("Bureau 3", 110, 365);
+        put("Escalier 1", 250, 80);   put("Couloir Nord", 360, 170);
+        put("LT Serveurs", 510, 100); put("Escalier 2", 420, 245);
+        put("Hall Central", 510, 340);
+        put("Sortie Ouest", 80, 440);    put("Amphithéâtre", 230, 440);
+        put("Couloir Sud", 410, 440);    put("Logement", 570, 440);
+        put("Sortie Est 1", 660, 220);   put("Sortie Est 2", 660, 340);
+        put("Sortie Est 3", 660, 430);
     }
 
     private void put(String n, double x, double y) {
         pos.putIfAbsent(n, new javafx.geometry.Point2D(x, y));
     }
-
-    // ── UI components ─────────────────────────────────────
 
     private Button btn(String text, String color) {
         Button b = new Button(text);
@@ -472,19 +774,28 @@ public class AdminView {
         return b;
     }
 
-    private Label sectionTitle(String text) {
+    private Label sectionLbl(String text) {
         Label l = new Label(text);
         l.setFont(Font.font("Sans", FontWeight.BOLD, 12));
         l.setTextFill(Color.web("#1a237e"));
         return l;
     }
 
+    private Label infoLbl(String text) {
+        Label l = new Label(text);
+        l.setStyle("-fx-font-size:11px;-fx-text-fill:#546e7a;");
+        return l;
+    }
+
     private HBox legendRow(Color c, String text) {
-        Label dot = new Label("●");
-        dot.setTextFill(c);
-        Label lbl = new Label(text);
-        lbl.setStyle("-fx-font-size:10px;");
+        Label dot = new Label("●"); dot.setTextFill(c);
+        Label lbl = new Label(text); lbl.setStyle("-fx-font-size:10px;");
         return new HBox(6, dot, lbl);
+    }
+
+    private Background bg(String hex) {
+        return new Background(new BackgroundFill(Color.web(hex),
+            CornerRadii.EMPTY, Insets.EMPTY));
     }
 
     private ComboBox<String> nodeCombo() {
@@ -515,8 +826,8 @@ public class AdminView {
         GridPane g = new GridPane();
         g.setHgap(10); g.setVgap(8); g.setPadding(new Insets(10));
         for (int i = 0; i < pairs.length; i += 2) {
-            g.add(new Label(pairs[i].toString()), 0, i/2);
-            g.add((javafx.scene.Node) pairs[i+1], 1, i/2);
+            g.add(new Label(pairs[i].toString()), 0, i / 2);
+            g.add((javafx.scene.Node) pairs[i + 1], 1, i / 2);
         }
         return g;
     }
