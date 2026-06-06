@@ -8,7 +8,7 @@ import java.util.ArrayList;
  * Moves at normal speed, uses shortest path, waits politely in congestion.
  * Identical to EvacuateStrategy but semantically distinct for security agents.
  */
-public class GuideStrategy extends EvacuateStrategy {
+public class GuideStrategy extends EvacuateStrategy implements java.io.Serializable {
 
     @Override
     protected void onArrival(Agent agent) {

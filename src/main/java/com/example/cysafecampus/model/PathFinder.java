@@ -42,7 +42,7 @@ public class PathFinder {
 
     /**
      * Core Dijkstra algorithm implementation.
-     * * @param start The starting building element.
+     * @param start The starting building element.
      * @param destination The target building element.
      * @param agentSpeed The max speed of the agent.
      * @param useTimeAndCongestion Flag: true to use time/congestion costs, false for physical distance.
@@ -61,14 +61,14 @@ public class PathFinder {
             NodeRecord currentRecord = queue.poll();
             BuildingElement currentElement = currentRecord.element;
 
-            // Arrivée à destination
+            // Destination reached
             if (currentElement.equals(destination)) {
                 return reconstructPath(previousNodes, destination);
             }
 
-            // Pour chaque voisin accessible
+            // For each accessible neighbor
             for (BuildingElement neighbor : getNeighbors(currentElement)) {
-                // Si l'élément est bloqué (ex: en feu), on l'ignore totalement
+                // Skip blocked elements (fire, locked, etc.)
                 if (neighbor.isBlocked()) continue;
 
                 double edgeCost = calculateCost(currentElement, neighbor, agentSpeed, useTimeAndCongestion);
@@ -82,7 +82,7 @@ public class PathFinder {
             }
         }
 
-        // Aucun chemin trouvé
+        // No path found
         return new ArrayList<>();
     }
 
@@ -115,7 +115,7 @@ public class PathFinder {
      * Calculates the cost to move from current to neighbor.
      */
     private static double calculateCost(BuildingElement current, BuildingElement neighbor, double agentSpeed, boolean useTimeAndCongestion) {
-        double distance = 1.0; // Coût de base arbitraire pour entrer dans une salle
+        double distance = 1.0; // Base cost to enter a room
         double speedFactor = 1.0;
         double congestion = 0.0;
 
@@ -125,18 +125,18 @@ public class PathFinder {
 
             if (useTimeAndCongestion) {
                 speedFactor = p.getSpeedFactor();
-                // Calcul de la congestion : C = occupation / capacité
+                // Congestion ratio: C = occupancy / capacity
                 congestion = (double) p.getCurrentOccupancy() / p.getMaxCapacity();
-                if (congestion >= 1.0) congestion = 0.99; // Évite la division par zéro mathématique
+                if (congestion >= 1.0) congestion = 0.99; // Cap at 0.99 to avoid division by zero
             }
         }
 
         if (!useTimeAndCongestion) {
-            return distance; // Mode Shortest Path
+            return distance; // Shortest path: distance only
         } else {
-            // Mode Fastest Path (Calcul du Temps)
+            // Fastest path: time = distance / (speed * speedFactor * (1 - congestion))
             double effectiveSpeed = agentSpeed * speedFactor * (1.0 - congestion);
-            if (effectiveSpeed <= 0) return Double.MAX_VALUE; // Impossible d'avancer
+            if (effectiveSpeed <= 0) return Double.MAX_VALUE; // Passage effectively impassable
 
             return distance / effectiveSpeed;
         }
@@ -149,7 +149,7 @@ public class PathFinder {
         List<BuildingElement> path = new ArrayList<>();
         BuildingElement current = target;
         while (current != null) {
-            path.add(0, current); // Ajoute au début de la liste
+            path.add(0, current); // Prepend to reconstruct path from start to end
             current = previousNodes.get(current);
         }
         return path;
