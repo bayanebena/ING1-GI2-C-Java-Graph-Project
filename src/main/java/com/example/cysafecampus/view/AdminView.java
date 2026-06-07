@@ -203,11 +203,7 @@ public class AdminView {
         });
         resetBtn.setOnAction(e -> {
             controller.reset();
-            statusLbl.setText("NORMAL");
-            statusLbl.setStyle("-fx-background-color:#2e7d32;-fx-text-fill:white;" +
-                "-fx-padding:3 10;-fx-background-radius:5;-fx-font-weight:bold;");
-            playPauseBtn.setText("▶ Play");
-            selectedAgent = null; selectedNode = null;
+            refreshAfterReset();
             log("Simulation réinitialisée");
         });
 
@@ -1009,6 +1005,26 @@ public class AdminView {
         if (uiRefresh != null) uiRefresh.stop();
         controller.pause();
         new LoginView(stage, controller).show();
+    }
+
+
+
+    public void refreshAfterReset() {
+        pos.clear();
+        initPositions();
+
+        selectedNode = null;
+        selectedAgent = null;
+
+        statusLbl.setText("NORMAL");
+        statusLbl.setStyle("-fx-background-color:#2e7d32;-fx-text-fill:white;" +
+            "-fx-padding:3 10;-fx-background-radius:5;-fx-font-weight:bold;");
+
+        if (playPauseBtn != null) {
+            playPauseBtn.setText("▶ Play");
+        }
+
+        draw();
     }
 
     private double[] generateFreeNodePosition() {
