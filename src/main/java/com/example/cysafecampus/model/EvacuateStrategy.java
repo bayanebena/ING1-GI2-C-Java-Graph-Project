@@ -123,12 +123,18 @@ public class EvacuateStrategy implements MovementStrategy, Serializable {
             }
 
         } else {
-            // Room or Exit — instant move
-            agent.getCurrentLocation().agentLeaves();
-            next.agentEnters(agent.getMaxSpeed());
-            agent.setCurrentLocation(next);
-            agent.setPathIndex(idx + 1);
-            agent.setProgress(0.0);
+            // Move progressively between two visible graph nodes instead of teleporting.
+            double step = agent.getMaxSpeed() / 10.0;
+            agent.setProgress(agent.getProgress() + step);
+
+            if (agent.getProgress() >= 1.0) {
+                agent.getCurrentLocation().agentLeaves();
+                next.agentEnters(agent.getMaxSpeed());
+
+                agent.setCurrentLocation(next);
+                agent.setPathIndex(idx + 1);
+                agent.setProgress(0.0);
+            }
         }
     }
 
