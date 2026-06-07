@@ -294,13 +294,15 @@ public class GraphController {
         }
 
         for (int i = 0; i < count; i++) {
-            String name = "Salle_" + System.currentTimeMillis() + "_" + i;
+            RoomType type = randomRoomType();
+            String name = generateRoomName(type);
 
             double[] position = generateFreePosition();
             double x = position[0];
             double y = position[1];
 
-            Room room = new Room(name, 30, 1);
+            int capacity = type == RoomType.AMPHITHEATER ? 120 : 30;
+            Room room = new Room(name, capacity, 1, type);
             room.setPosition(x, y);
             graph.addElement(room);
 
@@ -314,6 +316,42 @@ public class GraphController {
         }
 
         clearAgentRoutes();
+    }
+
+    private String generateRoomName(RoomType type) {
+        String prefix;
+
+        if (type == RoomType.AMPHITHEATER) {
+            prefix = "Amphi";
+        } else if (type == RoomType.OFFICE) {
+            prefix = "Bureau";
+        } else {
+            prefix = "Salle";
+        }
+
+        int index = 1;
+        String name;
+
+        do {
+            name = prefix + " " + index;
+            index++;
+        } while (findElementByName(name) != null);
+
+        return name;
+    }
+
+    private RoomType randomRoomType() {
+        double r = Math.random();
+
+        if (r < 0.15) {
+            return RoomType.AMPHITHEATER;
+        }
+
+        if (r < 0.65) {
+            return RoomType.OFFICE;
+        }
+
+        return RoomType.CLASSROOM;
     }
 
     private double[] generateFreePosition() {
