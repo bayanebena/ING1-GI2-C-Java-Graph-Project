@@ -740,49 +740,49 @@ public class AdminView {
     }
 
     private void handleAddEdge() {
-        ComboBox<String> firstB = nodeCombo();
-        ComboBox<String> secondB = nodeCombo();
+        ComboBox<String> spaceB = new ComboBox<>();
+        ComboBox<String> passageB = new ComboBox<>();
+
+        controller.getGraph().getElements().forEach(el -> {
+            if (el.getName().contains("↔")) return;
+
+            if (el instanceof Passage) {
+                passageB.getItems().add(el.getName());
+            } else {
+                spaceB.getItems().add(el.getName());
+            }
+        });
+
+        spaceB.getSelectionModel().selectFirst();
+        passageB.getSelectionModel().selectFirst();
 
         dialog("Ajouter une arête",
-            grid("Nœud 1:", firstB, "Nœud 2:", secondB), () -> {
-                if (firstB.getValue() == null || secondB.getValue() == null) {
+            grid("Espace / sortie:", spaceB, "Jonction / palier:", passageB), () -> {
+                if (spaceB.getValue() == null || passageB.getValue() == null) {
                     showErr("Sélection invalide");
                     return;
                 }
 
-                if (firstB.getValue().equals(secondB.getValue())) {
-                    showErr("Impossible de relier un nœud à lui-même");
-                    return;
-                }
-
-                controller.addConnection(firstB.getValue(), secondB.getValue());
+                controller.addConnection(spaceB.getValue(), passageB.getValue());
                 draw();
             });
     }
-
     private void handleRemoveEdge() {
         ComboBox<String> edgeB = new ComboBox<>();
 
         for (Passage passage : controller.getGraph().getPassages()) {
+            if (passage.getName().contains("↔")) continue;
+
             for (Door door : passage.getConnectedDoors()) {
                 Room room = door.getRoom();
 
-                if (room.getName().contains("↔")) {
-                    String[] parts = room.getName().split("↔");
+                if (room == null) continue;
+                if (room.getName().contains("↔")) continue;
 
-                    if (parts.length == 2) {
-                        String label = parts[0] + " → " + parts[1];
+                String label = room.getName() + " → " + passage.getName();
 
-                        if (!edgeB.getItems().contains(label)) {
-                            edgeB.getItems().add(label);
-                        }
-                    }
-                } else {
-                    String label = room.getName() + " → " + passage.getName();
-
-                    if (!edgeB.getItems().contains(label)) {
-                        edgeB.getItems().add(label);
-                    }
+                if (!edgeB.getItems().contains(label)) {
+                    edgeB.getItems().add(label);
                 }
             }
         }
