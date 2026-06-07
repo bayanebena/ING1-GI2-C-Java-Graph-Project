@@ -759,21 +759,19 @@ public class GraphController {
         Person p4 = new Person("Malak", office3, 1.1, Behavior.POLITE, 0.7);
         SecurityAgent sec = new SecurityAgent("Agent 01", mainHall, mainHall);
 
-        // Give agents a strategy and starting destination so they move immediately
+        // Give agents a strategy 
         p1.setStrategy(new EvacuateStrategy());
-        p1.setDestination(exitEast1);
-
         p2.setStrategy(new EvacuateStrategy());
-        p2.setDestination(exitEast2);
-
         p3.setStrategy(new EvacuateStrategy());
-        p3.setDestination(exitWest);
-
         p4.setStrategy(new EvacuateStrategy());
-        p4.setDestination(exitEast3);
-
         sec.setStrategy(new EvacuateStrategy());
-        sec.setDestination(exitEast2);
+
+
+        p1.setDestination(null);
+        p2.setDestination(null);
+        p3.setDestination(null);
+        p4.setDestination(null);
+        sec.setDestination(null);
 
         for (Agent a : new Agent[]{p1, p2, p3, p4, sec}) {
             graph.addAgent(a);
