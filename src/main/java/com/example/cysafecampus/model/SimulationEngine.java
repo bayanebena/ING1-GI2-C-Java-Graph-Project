@@ -138,8 +138,10 @@ public class SimulationEngine {
                 continue;
             }
 
-            if (agent.getDestination() == null
-                    && agent.getCurrentLocation() != null) {
+            if (graph.isEmergencyActive()
+                    && agent.getDestination() == null
+                    && agent.getCurrentLocation() != null
+                    && !(agent.getCurrentLocation() instanceof Exit)) {
 
                 BuildingElement nearestExit = findNearestExit(agent);
 
