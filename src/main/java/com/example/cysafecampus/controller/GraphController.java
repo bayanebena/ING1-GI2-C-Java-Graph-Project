@@ -109,8 +109,18 @@ public class GraphController {
             graph.getSensors().clear();
             graph.getElements().addAll(loaded.getElements());
             graph.getPassages().addAll(loaded.getPassages());
-            for (Agent a : loaded.getAgents()) graph.addAgent(a);
-            for (Sensor s : loaded.getSensors()) graph.addSensor(s);
+
+            for (BuildingElement el : graph.getElements()) {
+                el.setCurrentOccupancy(0);
+            }
+
+            for (Agent a : loaded.getAgents()) {
+                graph.addAgent(a);
+            }
+
+            for (Sensor s : loaded.getSensors()) {
+                graph.addSensor(s);
+            }
             
         } catch (Exception e) {
             System.err.println("Load failed: " + e.getMessage());
@@ -152,8 +162,10 @@ public class GraphController {
                     toRemove.agentLeaves();
                     fallback.agentEnters(agent.getMaxSpeed());
                     agent.setCurrentLocation(fallback);
+                    agent.setProgress(0.0);
+                    agent.setPath(new java.util.ArrayList<>());
+                    agent.setDestination(null);
                 } else {
-                    // No adjacent element — remove the agent to avoid orphan
                     graph.removeAgent(agent);
                     continue;
                 }
@@ -162,6 +174,7 @@ public class GraphController {
             if (agent.getPath() != null && agent.getPath().contains(toRemove)) {
                 agent.setPath(new java.util.ArrayList<>());
                 agent.setDestination(null);
+                agent.setProgress(0.0);
             }
         }
 
@@ -316,11 +329,21 @@ public class GraphController {
             .findFirst()
             .ifPresent(agent -> {
                 agent.setName(newName);
-                if (location != null) agent.setCurrentLocation(location);
+
+                if (location != null && agent.getCurrentLocation() != location) {
+                    if (agent.getCurrentLocation() != null) {
+                        agent.getCurrentLocation().agentLeaves();
+                    }
+                    location.agentEnters(maxSpeed);
+                    agent.setCurrentLocation(location);
+                }
+
                 agent.setMaxSpeed(maxSpeed);
                 agent.setBehavior(behavior);
                 agent.setDensityTolerance(densityTolerance);
                 agent.setPath(new java.util.ArrayList<>());
+                agent.setDestination(null);
+                agent.setProgress(0.0);
             });
     }
 
