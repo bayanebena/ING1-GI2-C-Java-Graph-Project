@@ -3,6 +3,9 @@ package com.example.cysafecampus.controller;
 import com.example.cysafecampus.model.*;
 import java.util.function.Consumer;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import javafx.application.Platform;
 
 /**
@@ -233,10 +236,12 @@ public class GraphController {
             if (agent.getCurrentLocation() != null
                     && agent.getCurrentLocation().equals(toRemove)) {
 
-                if (adjacent != null) {
-                    moveAgentToElement(agent, adjacent);
+                BuildingElement target = findPreviousOrAdjacentElement(agent, toRemove);
+
+                if (target != null) {
+                    moveAgentToElement(agent, target);
                 } else {
-                    graph.removeAgent(agent);
+                    resetAgentRoute(agent);
                 }
             } else {
                 resetAgentRoute(agent);
@@ -534,16 +539,36 @@ public class GraphController {
             .findFirst()
             .orElse(null);
 
-        if (junction instanceof Room) {
-            Room junctionRoom = (Room) junction;
-
-            for (Door door : new java.util.ArrayList<>(junctionRoom.getDoors())) {
-                door.getPassage().getConnectedDoors().remove(door);
-            }
-
-            junctionRoom.getDoors().clear();
-            graph.removeElement(junctionRoom);
+        if (!(junction instanceof Room)) {
+            return;
         }
+
+        Room junctionRoom = (Room) junction;
+
+        // If agents are currently inside this virtual edge, move them back
+        // to one of the two passage endpoints.
+        for (Agent agent : new java.util.ArrayList<>(graph.getAgents())) {
+            if (agent.getCurrentLocation() != null
+                    && agent.getCurrentLocation().equals(junctionRoom)) {
+
+                BuildingElement target = findPreviousOrAdjacentElement(agent, junctionRoom);
+
+                if (target == null) {
+                    target = a;
+                }
+
+                moveAgentToElement(agent, target);
+            } else {
+                resetAgentRoute(agent);
+            }
+        }
+
+        for (Door door : new java.util.ArrayList<>(junctionRoom.getDoors())) {
+            door.getPassage().getConnectedDoors().remove(door);
+        }
+
+        junctionRoom.getDoors().clear();
+        graph.removeElement(junctionRoom);
     }
 
     private void clearAgentRoutes() {
@@ -653,6 +678,35 @@ public class GraphController {
         return graph.getElements().stream()
             .filter(el -> el.getName().equals(name))
             .findFirst().orElse(null);
+    }
+
+
+    private BuildingElement findPreviousOrAdjacentElement(Agent agent, BuildingElement removed) {
+        if (agent == null || removed == null) return null;
+
+        List<BuildingElement> path = agent.getPath();
+        int index = agent.getPathIndex();
+
+        // First choice: move the agent back to the previous element in its path.
+        if (path != null && index > 0 && index - 1 < path.size()) {
+            BuildingElement previous = path.get(index - 1);
+
+            if (previous != null && !previous.equals(removed) && graph.getElements().contains(previous)) {
+                return previous;
+            }
+        }
+
+        // Second choice: move the agent to the next valid element in its path.
+        if (path != null && index + 1 < path.size()) {
+            BuildingElement next = path.get(index + 1);
+
+            if (next != null && !next.equals(removed) && graph.getElements().contains(next)) {
+                return next;
+            }
+        }
+
+        // Third choice: use any adjacent element.
+        return findAdjacentElement(removed);
     }
 
     private BuildingElement findAdjacentElement(BuildingElement element) {
