@@ -282,8 +282,7 @@ public class AdminView {
         gc.fillRect(0, 0, CW, CH);
 
         // ── Edges ─────────────────────────────────────────
-        drawDefaultEdges(gc);
-
+        drawEdgesFromModel(gc);
         // ── Selected agent path highlight ─────────────────
         if (selectedAgent != null && selectedAgent.getPath() != null) {
             List<BuildingElement> path = selectedAgent.getPath();
@@ -323,6 +322,76 @@ public class AdminView {
                 drawAgent(gc, p.getX(), p.getY(), a, a.equals(selectedAgent));
             }
         }
+    }
+    private void drawEdgesFromModel(GraphicsContext gc) {
+        gc.setStroke(Color.web("#455a64"));
+        gc.setLineWidth(3.0);
+
+        for (Passage passage : controller.getGraph().getPassages()) {
+            for (Door door : passage.getConnectedDoors()) {
+                Room room = door.getRoom();
+
+                if (room == null) continue;
+
+                javafx.geometry.Point2D passagePos = getPositionForElement(passage);
+                javafx.geometry.Point2D roomPos = getPositionForElement(room);
+
+                if (passagePos == null || roomPos == null) continue;
+
+                gc.strokeLine(
+                    passagePos.getX(),
+                    passagePos.getY(),
+                    roomPos.getX(),
+                    roomPos.getY()
+                );
+            }
+        }
+    }
+
+    private javafx.geometry.Point2D getPositionForElement(BuildingElement el) {
+        if (el.getName().contains("↔")) {
+            return getJunctionPosition(el);
+        }
+
+        javafx.geometry.Point2D p = pos.get(el.getName());
+
+        if (p != null) {
+            return p;
+        }
+
+        if (el.getX() != 0.0 || el.getY() != 0.0) {
+            p = new javafx.geometry.Point2D(el.getX(), el.getY());
+            pos.put(el.getName(), p);
+            return p;
+        }
+
+        return null;
+    }
+
+    private javafx.geometry.Point2D getJunctionPosition(BuildingElement junction) {
+        String name = junction.getName();
+
+        if (!name.contains("↔")) {
+            return pos.get(name);
+        }
+
+        String[] parts = name.split("↔");
+
+        if (parts.length != 2) {
+            return null;
+        }
+
+        javafx.geometry.Point2D a = pos.get(parts[0]);
+        javafx.geometry.Point2D b = pos.get(parts[1]);
+
+        if (a == null || b == null) {
+            return null;
+        }
+
+        return new javafx.geometry.Point2D(
+            (a.getX() + b.getX()) / 2.0,
+            (a.getY() + b.getY()) / 2.0
+        );
     }
 
     private void drawDefaultEdges(GraphicsContext gc) {
@@ -729,14 +798,25 @@ public class AdminView {
 
     private void handleAddRandomNodes() {
         TextField countF = new TextField("5");
+
         dialog("Nœuds aléatoires", grid("Nombre:", countF), () -> {
             try {
                 controller.addRandomNodes(Integer.parseInt(countF.getText().trim()));
-                controller.getGraph().getElements().forEach(el -> pos.computeIfAbsent(
-                    el.getName(), k -> new javafx.geometry.Point2D(
-                        80 + Math.random() * 560, 50 + Math.random() * 380)));
+
+                controller.getGraph().getElements().forEach(el -> {
+                    if (!el.getName().contains("↔")
+                            && !pos.containsKey(el.getName())
+                            && (el.getX() != 0.0 || el.getY() != 0.0)) {
+
+                        pos.put(el.getName(),
+                            new javafx.geometry.Point2D(el.getX(), el.getY()));
+                    }
+                });
+
                 draw();
-            } catch (Exception ex) { showErr("Nombre invalide"); }
+            } catch (Exception ex) {
+                showErr("Nombre invalide");
+            }
         });
     }
 
