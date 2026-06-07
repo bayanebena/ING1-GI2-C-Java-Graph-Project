@@ -133,16 +133,80 @@ public class GraphController {
      * Adds a node to the graph model.
      */
     public void addNode(String name, String type, double x, double y) {
+        BuildingElement node;
+
         if (type.equalsIgnoreCase("Salle")) {
-            graph.addElement(new Room(name, 30, 1));
+            node = new Room(name, 30, 1);
         } else if (type.equalsIgnoreCase("Sortie")) {
-            Exit exit = new Exit(name, 100);
-            graph.addElement(exit);
-        } else if (type.equalsIgnoreCase("Couloir")) {
+            node = new Exit(name, 100);
+        } else {
             Passage passage = new Passage(name, 50, 1, 1.0, PassageType.CORRIDOR, 10.0);
-            graph.addElement(passage);
+            node = passage;
             graph.addPassage(passage);
         }
+
+        node.setPosition(x, y);
+        graph.addElement(node);
+    }
+
+    public void addConnection(String firstName, String secondName) {
+        BuildingElement first = findElementByName(firstName);
+        BuildingElement second = findElementByName(secondName);
+
+        if (first == null || second == null || first == second) {
+            return;
+        }
+
+        if (connectionExists(first, second)) {
+            return;
+        }
+
+        if (first instanceof Passage && second instanceof Passage) {
+            connectPassageToPassage((Passage) first, (Passage) second);
+            clearAgentRoutes();
+            return;
+        }
+
+        if (first instanceof Room && second instanceof Passage) {
+            addDoor((Room) first, (Passage) second);
+            clearAgentRoutes();
+            return;
+        }
+
+        if (first instanceof Passage && second instanceof Room) {
+            addDoor((Room) second, (Passage) first);
+            clearAgentRoutes();
+        }
+    }
+
+    private void addDoor(Room room, Passage passage) {
+        Door door = new Door(room, passage);
+        room.addDoor(door);
+        passage.addDoor(door);
+    }
+
+    private boolean connectionExists(BuildingElement first, BuildingElement second) {
+        if (first instanceof Room && second instanceof Passage) {
+            Room room = (Room) first;
+            Passage passage = (Passage) second;
+
+            return room.getDoors().stream()
+                .anyMatch(d -> d.getPassage().equals(passage));
+        }
+
+        if (first instanceof Passage && second instanceof Room) {
+            return connectionExists(second, first);
+        }
+
+        if (first instanceof Passage && second instanceof Passage) {
+            String name1 = first.getName() + "↔" + second.getName();
+            String name2 = second.getName() + "↔" + first.getName();
+
+            return graph.getElements().stream()
+                .anyMatch(el -> el.getName().equals(name1) || el.getName().equals(name2));
+        }
+
+        return false;
     }
 
     /**
@@ -152,53 +216,62 @@ public class GraphController {
         BuildingElement toRemove = findElementByName(name);
         if (toRemove == null) return;
 
-        // 1. Find adjacent element for agent relocation BEFORE removing
-        BuildingElement fallback = findAdjacentElement(toRemove);
+        java.util.List<BuildingElement> removedElements = new java.util.ArrayList<>();
+        removedElements.add(toRemove);
 
-        // 2. Relocate all agents currently on this element
+        for (BuildingElement el : new java.util.ArrayList<>(graph.getElements())) {
+            if (el.getName().contains("↔") && el.getName().contains(name)) {
+                removedElements.add(el);
+            }
+        }
+
+        BuildingElement fallback = graph.getElements().stream()
+            .filter(el -> !removedElements.contains(el))
+            .filter(el -> !el.getName().contains("↔"))
+            .findFirst()
+            .orElse(null);
+
         for (Agent agent : new java.util.ArrayList<>(graph.getAgents())) {
-            if (agent.getCurrentLocation().equals(toRemove)) {
+            if (removedElements.contains(agent.getCurrentLocation())) {
                 if (fallback != null) {
-                    toRemove.agentLeaves();
+                    agent.getCurrentLocation().agentLeaves();
                     fallback.agentEnters(agent.getMaxSpeed());
                     agent.setCurrentLocation(fallback);
-                    agent.setProgress(0.0);
-                    agent.setPath(new java.util.ArrayList<>());
-                    agent.setDestination(null);
                 } else {
                     graph.removeAgent(agent);
                     continue;
                 }
             }
-            // Clear path if it references the removed node
-            if (agent.getPath() != null && agent.getPath().contains(toRemove)) {
-                agent.setPath(new java.util.ArrayList<>());
-                agent.setDestination(null);
-                agent.setProgress(0.0);
-            }
+
+            agent.setPath(new java.util.ArrayList<>());
+            agent.setDestination(null);
+            agent.setProgress(0.0);
         }
 
-        // 3. Remove all connected doors/edges
-        if (toRemove instanceof Room) {
-            Room room = (Room) toRemove;
-            for (Door door : new java.util.ArrayList<>(room.getDoors())) {
-                door.getPassage().getConnectedDoors().remove(door);
+        for (BuildingElement el : removedElements) {
+            if (el instanceof Room) {
+                Room room = (Room) el;
+
+                for (Door door : new java.util.ArrayList<>(room.getDoors())) {
+                    door.getPassage().getConnectedDoors().remove(door);
+                }
+
+                room.getDoors().clear();
             }
-            room.getDoors().clear();
-        } else if (toRemove instanceof Passage) {
-            Passage passage = (Passage) toRemove;
-            for (Door door : new java.util.ArrayList<>(passage.getConnectedDoors())) {
-                door.getRoom().getDoors().remove(door);
+
+            if (el instanceof Passage) {
+                Passage passage = (Passage) el;
+
+                for (Door door : new java.util.ArrayList<>(passage.getConnectedDoors())) {
+                    door.getRoom().getDoors().remove(door);
+                }
+
+                passage.getConnectedDoors().clear();
+                graph.removePassage(passage);
             }
-            passage.getConnectedDoors().clear();
-            graph.removePassage(passage);
+
+            graph.removeElement(el);
         }
-
-        // 4. Also remove junction nodes linked to this element
-        graph.getElements().removeIf(el ->
-            el.getName().contains("↔") && el.getName().contains(name));
-
-        graph.removeElement(toRemove);
     }
 
     /** Updates a node's name and capacity. */
@@ -263,39 +336,63 @@ public class GraphController {
      * @param roomName the room side of the edge
      * @param passageName the passage side of the edge
      */
-    public void removeEdge(String roomName, String passageName) {
-        BuildingElement roomEl = findElementByName(roomName);
-        BuildingElement passageEl = findElementByName(passageName);
+    public void removeEdge(String firstName, String secondName) {
+        BuildingElement first = findElementByName(firstName);
+        BuildingElement second = findElementByName(secondName);
 
-        // Relocate agents currently in the passage back to the room (source node)
-        if (passageEl != null && roomEl != null) {
-            for (Agent agent : new java.util.ArrayList<>(graph.getAgents())) {
-                if (agent.getCurrentLocation().equals(passageEl)) {
-                    passageEl.agentLeaves();
-                    roomEl.agentEnters(agent.getMaxSpeed());
-                    agent.setCurrentLocation(roomEl);
-                    agent.setPath(new java.util.ArrayList<>());
-                    agent.setDestination(null);
-                }
-                // Clear paths that go through this passage
-                if (agent.getPath() != null && agent.getPath().contains(passageEl)) {
-                    agent.setPath(new java.util.ArrayList<>());
-                    agent.setDestination(null);
-                }
-            }
+        if (first == null || second == null) {
+            return;
         }
 
-        // Remove the door from both sides
-        for (BuildingElement el : graph.getElements()) {
-            if (el instanceof Passage && el.getName().equals(passageName)) {
-                ((Passage) el).getConnectedDoors().removeIf(
-                    door -> door.getRoom().getName().equals(roomName));
-            }
+        if (first instanceof Room && second instanceof Passage) {
+            removeDoor((Room) first, (Passage) second);
+            clearAgentRoutes();
+            return;
         }
-        // Remove from room side too
-        if (roomEl instanceof Room) {
-            ((Room) roomEl).getDoors().removeIf(
-                door -> door.getPassage().getName().equals(passageName));
+
+        if (first instanceof Passage && second instanceof Room) {
+            removeDoor((Room) second, (Passage) first);
+            clearAgentRoutes();
+            return;
+        }
+
+        if (first instanceof Passage && second instanceof Passage) {
+            removePassageToPassageConnection((Passage) first, (Passage) second);
+            clearAgentRoutes();
+        }
+    }
+
+    private void removeDoor(Room room, Passage passage) {
+        room.getDoors().removeIf(d -> d.getPassage().equals(passage));
+        passage.getConnectedDoors().removeIf(d -> d.getRoom().equals(room));
+    }
+
+    private void removePassageToPassageConnection(Passage a, Passage b) {
+        String name1 = a.getName() + "↔" + b.getName();
+        String name2 = b.getName() + "↔" + a.getName();
+
+        BuildingElement junction = graph.getElements().stream()
+            .filter(el -> el.getName().equals(name1) || el.getName().equals(name2))
+            .findFirst()
+            .orElse(null);
+
+        if (junction instanceof Room) {
+            Room junctionRoom = (Room) junction;
+
+            for (Door door : new java.util.ArrayList<>(junctionRoom.getDoors())) {
+                door.getPassage().getConnectedDoors().remove(door);
+            }
+
+            junctionRoom.getDoors().clear();
+            graph.removeElement(junctionRoom);
+        }
+    }
+
+    private void clearAgentRoutes() {
+        for (Agent agent : graph.getAgents()) {
+            agent.setPath(new java.util.ArrayList<>());
+            agent.setDestination(null);
+            agent.setProgress(0.0);
         }
     }
 
