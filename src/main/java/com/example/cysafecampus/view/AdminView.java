@@ -634,7 +634,11 @@ public class AdminView {
     // ── Handlers ──────────────────────────────────────────
 
     private void handleAddNode() {
-        TextField nameF = new TextField(), xF = new TextField("350"), yF = new TextField("240");
+        double[] freePos = generateFreeNodePosition();
+
+        TextField nameF = new TextField();
+        TextField xF = new TextField(String.valueOf((int) freePos[0]));
+        TextField yF = new TextField(String.valueOf((int) freePos[1]));
         ComboBox<String> typeB = new ComboBox<>();
         typeB.getItems().addAll("Salle", "Sortie", "Couloir"); typeB.getSelectionModel().selectFirst();
         dialog("Ajouter un nœud", grid("Nom:", nameF, "Type:", typeB, "X:", xF, "Y:", yF), () -> {
@@ -642,6 +646,10 @@ public class AdminView {
                 String n = nameF.getText().trim();
                 if (n.isEmpty()) { showErr("Nom vide"); return; }
                 double x = Double.parseDouble(xF.getText()), y = Double.parseDouble(yF.getText());
+                if (isTooCloseToExistingViewNode(x, y)) {
+                    showErr("Impossible de créer ce nœud : il est trop proche d’un autre nœud.");
+                    return;
+                }
                 controller.addNode(n, typeB.getValue(), x, y);
                 pos.put(n, new javafx.geometry.Point2D(x, y));
                 draw();
@@ -919,6 +927,39 @@ public class AdminView {
         if (uiRefresh != null) uiRefresh.stop();
         controller.pause();
         new LoginView(stage, controller).show();
+    }
+
+    private double[] generateFreeNodePosition() {
+        double x = 0;
+        double y = 0;
+
+        for (int attempts = 0; attempts < 300; attempts++) {
+            x = 100 + Math.random() * 620;
+            y = 80 + Math.random() * 360;
+
+            if (!isTooCloseToExistingViewNode(x, y)) {
+                return new double[]{x, y};
+            }
+        }
+
+        int count = pos.size();
+        x = 120 + (count * 90) % 620;
+        y = 90 + ((count * 90) / 620) * 90;
+
+        return new double[]{x, y};
+    }
+
+    private boolean isTooCloseToExistingViewNode(double x, double y) {
+        for (javafx.geometry.Point2D p : pos.values()) {
+            double dx = p.getX() - x;
+            double dy = p.getY() - y;
+
+            if (Math.sqrt(dx * dx + dy * dy) < 110) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // ── UI helpers ────────────────────────────────────────
