@@ -80,6 +80,11 @@ public class Graph implements Subject, Serializable {
 
     public List<Agent> getAgents() { return agents; }
 
+
+    public void clearObservers() {
+        observers.clear();
+    }
+
     // ── Sensors ───────────────────────────────────────────
 
     /**
