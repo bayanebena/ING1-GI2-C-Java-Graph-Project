@@ -44,6 +44,13 @@ public abstract class Agent implements Observer, Serializable {
     /** Remaining cycles to wait due to strong congestion */
     private int waitCycles;
 
+    /**
+     * Name of the location where the strong congestion delay has already been
+     * applied. This prevents the agent from being blocked forever while the
+     * node remains overcrowded.
+     */
+    private String strongCongestionDelayLocationName;
+
     public Agent(String name, BuildingElement currentLocation,
                  double maxSpeed, Behavior behavior, double densityTolerance) {
         this.id = UUID.randomUUID().toString();
@@ -57,6 +64,7 @@ public abstract class Agent implements Observer, Serializable {
         this.pathIndex = 0;
         this.progress = 0.0;
         this.waitCycles = 0;
+        this.strongCongestionDelayLocationName = null;
         this.evacuated = false;
     }
 
@@ -81,7 +89,6 @@ public abstract class Agent implements Observer, Serializable {
     // ── Setters ───────────────────────────────────────────
 
     public void setName(String name) { this.name = name; }
-    public void setCurrentLocation(BuildingElement location) { this.currentLocation = location; }
     public void setDestination(BuildingElement destination) { this.destination = destination; }
     public void setStrategy(MovementStrategy strategy) { this.strategy = strategy; }
     public void setState(AgentState state) { this.state = state; }
@@ -91,9 +98,58 @@ public abstract class Agent implements Observer, Serializable {
     public void setPath(List<BuildingElement> path) { this.path = path; this.pathIndex = 0; this.progress = 0.0; }
     public void setPathIndex(int pathIndex) { this.pathIndex = pathIndex; }
     public void setProgress(double progress) { this.progress = progress; }
-    public void setWaitCycles(int waitCycles) { this.waitCycles = waitCycles; }
     public void setEvacuated(boolean evacuated) { this.evacuated = evacuated; }
+    /**
+     * Updates the current location of the agent and resets the strong
+     * congestion delay marker when the agent changes location.
+     *
+     * @param location the new current location
+     */
+    public void setCurrentLocation(BuildingElement location) {
+        if (this.currentLocation != location) {
+            this.strongCongestionDelayLocationName = null;
+        }
+        this.currentLocation = location;
+    }
 
+        /**
+     * Sets the number of simulation cycles the agent must wait.
+     *
+     * @param waitCycles number of cycles to wait, negative values are converted to zero
+     */
+    public void setWaitCycles(int waitCycles) {
+        this.waitCycles = Math.max(0, waitCycles);
+    }
+
+    /**
+     * Checks whether the strong congestion delay has already been applied for
+     * the given location.
+     *
+     * @param location the overcrowded location
+     * @return true if the agent already waited for this location
+     */
+    public boolean hasCompletedStrongCongestionDelayFor(BuildingElement location) {
+        return location != null
+            && strongCongestionDelayLocationName != null
+            && strongCongestionDelayLocationName.equals(location.getName());
+    }
+
+    /**
+     * Marks the strong congestion delay as applied for the given location.
+     *
+     * @param location the overcrowded location
+     */
+    public void markStrongCongestionDelayCompletedFor(BuildingElement location) {
+        strongCongestionDelayLocationName = location != null ? location.getName() : null;
+    }
+
+    /**
+     * Clears the strong congestion delay marker.
+     */
+    public void clearStrongCongestionDelayMarker() {
+        strongCongestionDelayLocationName = null;
+    }
+    
 
     /**
      * Executes one simulation tick via the current strategy.
