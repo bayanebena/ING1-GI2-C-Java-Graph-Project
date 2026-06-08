@@ -384,13 +384,13 @@ public class ObserverView {
     private javafx.geometry.Point2D agentPos(Agent a) {
         if (a.getCurrentLocation() == null) return null;
 
-        javafx.geometry.Point2D base = pos.get(a.getCurrentLocation().getName());
+        javafx.geometry.Point2D base = getPositionForElement(a.getCurrentLocation());
         if (base == null) return null;
 
         BuildingElement next = a.getNextInPath();
 
         if (next != null && a.getProgress() > 0) {
-            javafx.geometry.Point2D np = pos.get(next.getName());
+            javafx.geometry.Point2D np = getPositionForElement(next);
 
             if (np != null) {
                 double t = a.getProgress();
