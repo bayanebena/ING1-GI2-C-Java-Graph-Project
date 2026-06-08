@@ -60,8 +60,11 @@ public class SupervisorAgent extends Agent {
     @Override
     public void update(String alert) {
         if (alert.equals("FIRE")) {
-            setState(AgentState.PANICKED);
+            // Supervisors are trained agents: they stay calm and keep guiding.
+            setState(AgentState.CALM);
             setStrategy(new EvacuateStrategy());
+            setPath(new java.util.ArrayList<>());
+            setProgress(0.0);
         } else {
             setState(AgentState.CALM);
         }
