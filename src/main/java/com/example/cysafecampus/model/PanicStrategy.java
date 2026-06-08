@@ -66,6 +66,7 @@ public class PanicStrategy extends EvacuateStrategy implements Serializable {
             }
 
             next.agentEnters(agent.getMaxSpeed());
+            recordCorridorPassage(previous, next, agent.getMaxSpeed());
             agent.setCurrentLocation(next);
             agent.setPathIndex(index + 1);
             agent.setProgress(0.0);
