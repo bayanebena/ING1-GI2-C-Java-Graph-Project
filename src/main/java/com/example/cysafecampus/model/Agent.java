@@ -119,8 +119,17 @@ public abstract class Agent implements Observer, Serializable {
      * Returns the next BuildingElement in the path, or null if none.
      */
     public BuildingElement getNextInPath() {
-        if (path == null || pathIndex + 1 >= path.size()) return null;
-        return path.get(pathIndex + 1);
+        if (path == null || path.isEmpty()) {
+            return null;
+        }
+
+        int nextIndex = pathIndex + 1;
+
+        if (nextIndex >= path.size()) {
+            return null;
+        }
+
+        return path.get(nextIndex);
     }
 
     @Override
