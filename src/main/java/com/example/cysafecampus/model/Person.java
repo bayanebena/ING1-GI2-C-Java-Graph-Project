@@ -31,19 +31,44 @@ public class Person extends Agent {
     @Override
     public void update(String alert) {
         if (alert.equals("FIRE")) {
-            setState(AgentState.PANICKED);
-            // Switch to panic strategy if already moving
-            if (getStrategy() != null) {
-                setStrategy(new PanicStrategy());
-                setPath(new java.util.ArrayList<>());
+            // Do not make every person panicked: a realistic crowd contains calm
+            // and stressed occupants. RUDE agents panic more often, POLITE agents
+            // usually stay calm, and FOLLOWER agents are in between.
+            if (shouldPanic()) {
+                setState(AgentState.PANICKED);
+            } else {
+                setState(AgentState.CALM);
             }
+
+            // Keep the progressive movement strategy. PanicStrategy used to move
+            // the agent directly into the next passage before drawing progress,
+            // which created visual jumps when the alarm was triggered.
+            setStrategy(new EvacuateStrategy());
+            setPath(new java.util.ArrayList<>());
+            setProgress(0.0);
         } else if (alert.equals("NORMAL")) {
             setState(AgentState.CALM);
-            // Reset to evacuate strategy — do NOT set null (would freeze agents)
-            if (getStrategy() != null) {
-                setStrategy(new EvacuateStrategy());
-                setPath(new java.util.ArrayList<>());
-            }
+            setStrategy(new EvacuateStrategy());
+            setPath(new java.util.ArrayList<>());
+            setProgress(0.0);
         }
+    }
+
+    /**
+     * Decides whether this person becomes panicked during an alert.
+     * @return true when the person should be displayed as panicked
+     */
+    private boolean shouldPanic() {
+        double panicProbability;
+
+        if (getBehavior() == Behavior.RUDE) {
+            panicProbability = 0.70;
+        } else if (getBehavior() == Behavior.FOLLOWER) {
+            panicProbability = 0.45;
+        } else {
+            panicProbability = 0.25;
+        }
+
+        return Math.random() < panicProbability;
     }
 }
