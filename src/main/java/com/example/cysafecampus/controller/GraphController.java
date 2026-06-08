@@ -82,6 +82,7 @@ public class GraphController {
         graph.getPassages().clear();
         graph.getAgents().clear();
         graph.getSensors().clear();
+        graph.clearObservers();
 
         graph.triggerAlert("NORMAL");
 
@@ -302,6 +303,24 @@ public class GraphController {
         clearAgentRoutes();
     }
 
+    /**
+     * Updates the spatial position of a graph element.
+     * This method is used by the view when the user moves a node on screen.
+     * @param name element name
+     * @param x horizontal coordinate
+     * @param y vertical coordinate
+     */
+    public void updateNodePosition(String name, double x, double y) {
+        BuildingElement element = findElementByName(name);
+
+        if (element == null) {
+            return;
+        }
+
+        element.setPosition(x, y);
+        clearAgentRoutes();
+    }
+
     /** Adds random nodes and connects them. */
     public void addRandomNodes(int count) {
         java.util.List<Passage> visiblePassages = graph.getPassages().stream()
@@ -386,7 +405,7 @@ public class GraphController {
             }
         }
 
-        // Si aucune place parfaite trouvée, on décale progressivement
+        // If no perfect position is found, gradually offset the node.
         int count = graph.getElements().size();
         x = 120 + (count * 90) % 650;
         y = 90 + ((count * 90) / 650) * 90;
@@ -401,7 +420,7 @@ public class GraphController {
             double ex = el.getX();
             double ey = el.getY();
 
-            // Ignore uniquement les éléments qui n'ont vraiment pas de position
+            // Ignore only elements that truly have no stored position.
             if (ex == 0.0 && ey == 0.0) continue;
 
             double dx = ex - x;
@@ -479,6 +498,23 @@ public class GraphController {
 
 
 
+
+
+    /**
+     * Updates the maximum capacity of a passage used as a visual edge.
+     * @param passageName passage name
+     * @param newCapacity new maximum number of agents allowed in the passage
+     */
+    public void updateEdgeCapacity(String passageName, int newCapacity) {
+        BuildingElement element = findElementByName(passageName);
+
+        if (!(element instanceof Passage)) {
+            return;
+        }
+
+        element.setMaxCapacity(Math.max(1, newCapacity));
+        clearAgentRoutes();
+    }
 
     /**
      * Removes the edge (Door) between a Room and a Passage.
