@@ -110,6 +110,7 @@ public class EvacuateStrategy implements MovementStrategy, Serializable {
             }
 
             next.agentEnters(agent.getMaxSpeed());
+            recordCorridorPassage(previous, next, agent.getMaxSpeed());
 
             agent.setCurrentLocation(next);
             agent.setPathIndex(idx + 1);
@@ -124,6 +125,60 @@ public class EvacuateStrategy implements MovementStrategy, Serializable {
 
         agent.setProgress(newProgress);
         return;
+    }
+
+    /**
+     * Records edge-level statistics for the corridor segment that connects two
+     * consecutive path elements. This keeps edge statistics separate from room,
+     * exit and junction statistics.
+     *
+     * @param previous element left by the agent
+     * @param next element reached by the agent
+     * @param agentSpeed speed of the agent
+     */
+    protected void recordCorridorPassage(BuildingElement previous, BuildingElement next, double agentSpeed) {
+        Door door = findConnectingDoor(previous, next);
+
+        if (door != null) {
+            door.recordAgentPassage(agentSpeed);
+        }
+    }
+
+    /**
+     * Finds the door object that represents the corridor segment between two
+     * neighboring graph elements.
+     *
+     * @param first first graph element
+     * @param second second graph element
+     * @return matching door, or null when the elements are not directly linked
+     */
+    private Door findConnectingDoor(BuildingElement first, BuildingElement second) {
+        if (first instanceof Room && second instanceof Passage) {
+            return findDoor((Room) first, (Passage) second);
+        }
+
+        if (first instanceof Passage && second instanceof Room) {
+            return findDoor((Room) second, (Passage) first);
+        }
+
+        return null;
+    }
+
+    /**
+     * Finds the door linking a specific room-like node to a specific passage.
+     *
+     * @param room room-like node
+     * @param passage passage node
+     * @return matching door, or null if no matching segment exists
+     */
+    private Door findDoor(Room room, Passage passage) {
+        for (Door door : room.getDoors()) {
+            if (door.getPassage() == passage) {
+                return door;
+            }
+        }
+
+        return null;
     }
 
     protected void onArrival(Agent agent) {
