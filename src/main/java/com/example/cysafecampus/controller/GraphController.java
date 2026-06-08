@@ -474,8 +474,19 @@ public class GraphController {
 
 
 
+    /**
+     * Moves an agent to another building element after a forced relocation.
+     *
+     * <p>If the destination element becomes overcrowded, the agent receives
+     * a two-cycle delay before being allowed to enter a corridor.</p>
+     *
+     * @param agent the agent to move
+     * @param target the destination building element
+     */
     private void moveAgentToElement(Agent agent, BuildingElement target) {
-        if (agent == null || target == null) return;
+        if (agent == null || target == null) {
+            return;
+        }
 
         BuildingElement current = agent.getCurrentLocation();
 
@@ -491,12 +502,16 @@ public class GraphController {
         agent.setProgress(0.0);
 
         // Forced relocation may create overcrowding.
-        // The agent waits 2 cycles before moving again.
-        agent.setWaitCycles(2);
+        // The two-cycle delay is applied only when the destination node
+        // is actually above its maximum capacity.
+        if (target.isOvercrowded()) {
+            agent.setWaitCycles(2);
+            agent.markStrongCongestionDelayCompletedFor(target);
+        } else {
+            agent.setWaitCycles(0);
+            agent.clearStrongCongestionDelayMarker();
+        }
     }
-
-
-
 
 
 
