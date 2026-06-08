@@ -41,11 +41,21 @@ public class EvacuateStrategy implements MovementStrategy, Serializable {
         BuildingElement next = path.get(idx + 1);
 
         // Strong congestion rule: if a forced relocation placed too many agents
-        // in the current node, agents must wait before entering an available edge
-        // until the node returns to a normal occupancy level.
+        // in the current node, the agent loses two simulation cycles before it
+        // can enter an available corridor. The marker prevents infinite waiting
+        // while the node is still overcrowded.
         BuildingElement current = agent.getCurrentLocation();
-        if (current != null && current.isOvercrowded() && next instanceof Passage) {
+
+        if (current != null && !current.isOvercrowded()) {
+            agent.clearStrongCongestionDelayMarker();
+        }
+
+        if (current != null
+                && current.isOvercrowded()
+                && next instanceof Passage
+                && !agent.hasCompletedStrongCongestionDelayFor(current)) {
             agent.setWaitCycles(2);
+            agent.markStrongCongestionDelayCompletedFor(current);
             return;
         }
 
