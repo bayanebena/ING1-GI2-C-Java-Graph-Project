@@ -16,7 +16,9 @@ import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -44,7 +46,7 @@ public class GraphView {
     private static final Color COL_BLOCKED = Color.web("#212121");
     private static final Color STROKE_NORM = Color.web("#3949ab");
     private static final Color STROKE_EXIT = Color.web("#42a5f5");
-    private static final Color AGENT_CALM  = Color.web("#69f0ae");
+    private static final Color AGENT_CALM  = Color.web("#40c4ff");
     private static final Color AGENT_PANIC = Color.web("#ff5252");
 
     private final Stage stage;
@@ -53,6 +55,16 @@ public class GraphView {
     private Label statusLabel;
     private Label tickLabel;
     private Button playPauseBtn;
+    private Label selectionLabel;
+
+    /** Context menu displayed when the user right-clicks the graph. */
+    private ContextMenu graphContextMenu;
+
+    /** Currently selected graph element for statistics display. */
+    private BuildingElement selectedElement;
+
+    /** Currently selected agent for remaining path display. */
+    private Agent selectedAgent;
 
     private final Map<String, Point2D> nodePositions = new HashMap<>();
 
@@ -95,6 +107,7 @@ public class GraphView {
         // ── Canvas ────────────────────────────────────────
         canvas = new Canvas(CANVAS_W, CANVAS_H);
         setupContextMenu();
+        setupSelectionHandler();
         StackPane center = new StackPane(canvas);
         center.setStyle("-fx-background-color:#0f0f1a;");
 
@@ -119,6 +132,9 @@ public class GraphView {
             drawGraphFromModel();
         });
 
+        selectionLabel = new Label("Sélection : aucune");
+        selectionLabel.setStyle("-fx-text-fill:#e0e0ff;-fx-font-size:11px;");
+
         Label speedLbl = new Label("Vitesse");
         speedLbl.setStyle("-fx-text-fill:#7070a0;-fx-font-size:11px;");
         Slider speedSlider = new Slider(50, 2000, 500);
@@ -141,7 +157,7 @@ public class GraphView {
         HBox.setHgrow(sp2, Priority.ALWAYS);
 
         HBox bottomBar = new HBox(10,
-            playPauseBtn, stepBtn, sp2,
+            playPauseBtn, stepBtn, selectionLabel, sp2,
             speedLbl, speedSlider, legend);
             
         bottomBar.setPadding(new Insets(8, 14, 8, 14));
@@ -176,8 +192,10 @@ public class GraphView {
         gc.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
         // ── Edges / Connections ───────────────────────────
-        drawDefaultPlanEdges(gc);
+        drawGraphEdges(gc);
 
+        // Draw the selected agent route above the network edges.
+        drawSelectedAgentRoute(gc);
 
        // Nodes — rooms, exits and junctions
         for (BuildingElement el : graph.getElements()) {
@@ -189,6 +207,9 @@ public class GraphView {
             drawNode(gc, el, pos);
         }
 
+        // Selection details are refreshed after density and movement changes.
+        refreshSelectionLabel();
+
         // ── Agents ────────────────────────────────────────
         for (Agent agent : graph.getAgents()) {
             Point2D pos = agentPos(agent);
@@ -199,36 +220,105 @@ public class GraphView {
         if (tickLabel != null)
             tickLabel.setText("Tick: " + controller.getTickCount());
     }
-    private void drawDefaultPlanEdges(GraphicsContext gc) {
-        gc.setStroke(EDGE_COLOR);
-        gc.setLineWidth(5.0);
+    /**
+     * Draws every model connection instead of relying on fixed default lines.
+     * This keeps the visual graph consistent after adding, moving or deleting nodes.
+     * @param gc canvas graphics context
+     */
+    private void drawGraphEdges(GraphicsContext gc) {
+        Graph graph = controller.getGraph();
 
-        // Réserve -> Palier Esc. 1 -> Jonction Nord
-        gc.strokeLine(90, 80, 260, 80);
-        gc.strokeLine(260, 80, 330, 230);
+        for (Passage passage : graph.getPassages()) {
+            Point2D passagePosition = positionForElement(passage);
+            if (passagePosition == null) continue;
 
-        // Bureaux -> Jonction Nord
-        gc.strokeLine(90, 180, 330, 230);
-        gc.strokeLine(90, 280, 330, 230);
+            for (Door door : passage.getConnectedDoors()) {
+                Room room = door.getRoom();
+                if (room == null || room.getName().contains("↔")) continue;
 
-        // Jonction Nord -> Palier Esc. 2 -> Jonction Centrale
-        gc.strokeLine(330, 230, 470, 230);
-        gc.strokeLine(470, 230, 600, 310);
+                Point2D roomPosition = positionForElement(room);
+                drawEdge(gc, roomPosition, passagePosition, passage);
+            }
+        }
 
-        // Salles centrales -> Jonction Centrale
-        gc.strokeLine(600, 110, 600, 310);
-        gc.strokeLine(90, 380, 600, 310);
+        for (BuildingElement element : graph.getElements()) {
+            if (!(element instanceof Room) || !element.getName().contains("↔")) continue;
 
-        // Jonction Centrale -> sorties Est
-        gc.strokeLine(600, 310, 820, 190);
-        gc.strokeLine(600, 310, 820, 310);
-        gc.strokeLine(600, 310, 820, 430);
+            Room junction = (Room) element;
+            List<Passage> connectedPassages = new ArrayList<>();
+            for (Door door : junction.getDoors()) {
+                if (door.getPassage() != null) connectedPassages.add(door.getPassage());
+            }
 
-        // Partie Sud
-        gc.strokeLine(300, 500, 500, 500);
-        gc.strokeLine(700, 500, 500, 500);
-        gc.strokeLine(500, 500, 600, 310);
-        gc.strokeLine(90, 500, 500, 500);
+            if (connectedPassages.size() == 2) {
+                Passage first = connectedPassages.get(0);
+                Passage second = connectedPassages.get(1);
+                Point2D firstPosition = positionForElement(first);
+                Point2D secondPosition = positionForElement(second);
+                drawEdge(gc, firstPosition, secondPosition, first);
+            }
+        }
+    }
+
+    /**
+     * Draws a single edge using a density-dependent color.
+     * @param gc canvas graphics context
+     * @param from start position
+     * @param to end position
+     * @param passage passage used to compute edge density
+     */
+    private void drawEdge(GraphicsContext gc, Point2D from, Point2D to, Passage passage) {
+        if (from == null || to == null || passage == null) return;
+
+        gc.setStroke(edgeColor(passage));
+        gc.setLineWidth(passage.equals(selectedElement) ? 8.0 : 5.0);
+        gc.strokeLine(from.getX(), from.getY(), to.getX(), to.getY());
+
+        String capacity = passage.getCurrentOccupancy() + "/" + passage.getMaxCapacity();
+        double midX = (from.getX() + to.getX()) / 2.0;
+        double midY = (from.getY() + to.getY()) / 2.0;
+        gc.setFill(TEXT_LIGHT);
+        gc.setFont(Font.font("Sans", FontWeight.BOLD, 9));
+        gc.fillText(capacity, midX + 6, midY - 6);
+    }
+
+    /**
+     * Returns the visual color of an edge according to passage occupancy.
+     * @param passage passage represented by the edge
+     * @return density color
+     */
+    private Color edgeColor(Passage passage) {
+        if (passage.getMaxCapacity() <= 0) return EDGE_COLOR;
+        double ratio = (double) passage.getCurrentOccupancy() / passage.getMaxCapacity();
+        if (ratio >= 1.0) return EDGE_FULL;
+        if (ratio >= 0.6) return EDGE_DENSE;
+        return EDGE_COLOR;
+    }
+
+    /**
+     * Highlights the remaining route of the selected agent.
+     * @param gc canvas graphics context
+     */
+    private void drawSelectedAgentRoute(GraphicsContext gc) {
+        if (selectedAgent == null) return;
+
+        List<BuildingElement> path = selectedAgent.getPath();
+        int index = selectedAgent.getPathIndex();
+        if (path == null || path.size() < 2 || index >= path.size() - 1) return;
+
+        gc.setStroke(Color.web("#ffff00"));
+        gc.setLineWidth(2.5);
+        gc.setLineDashes(8, 6);
+
+        for (int i = Math.max(0, index); i < path.size() - 1; i++) {
+            Point2D from = positionForElement(path.get(i));
+            Point2D to = positionForElement(path.get(i + 1));
+            if (from != null && to != null) {
+                gc.strokeLine(from.getX(), from.getY(), to.getX(), to.getY());
+            }
+        }
+
+        gc.setLineDashes(null);
     }
 
 
@@ -240,6 +330,10 @@ public class GraphView {
         gc.setFill(fill);
         gc.setStroke(stroke);
         gc.setLineWidth(3);
+
+        if (el.equals(selectedElement)) {
+            gc.setLineWidth(6);
+        }
 
         if (el instanceof Exit) {
             // Rounded rect
@@ -285,11 +379,11 @@ public class GraphView {
     }
 
     private Point2D agentPos(Agent agent) {
-        Point2D base = nodePositions.get(agent.getCurrentLocation().getName());
+        Point2D base = positionForElement(agent.getCurrentLocation());
         if (base == null) return null;
         BuildingElement next = agent.getNextInPath();
         if (next != null && agent.getProgress() > 0) {
-            Point2D np = nodePositions.get(next.getName());
+            Point2D np = positionForElement(next);
             if (np != null) {
                 double t = agent.getProgress();
                 return new Point2D(
@@ -304,13 +398,13 @@ public class GraphView {
 
     private Color nodeColor(BuildingElement el) {
         if (el.isBlocked()) return COL_BLOCKED;
-        if (el instanceof Exit) return COL_EXIT;
-        if (el instanceof Passage) return COL_PASSAGE;
         if (el.getMaxCapacity() == 0) return COL_GREEN;
         double r = (double) el.getCurrentOccupancy() / el.getMaxCapacity();
-        if (r < 0.4) return COL_GREEN;
-        if (r < 0.8) return COL_ORANGE;
-        return COL_RED;
+        if (r >= 1.0) return COL_RED;
+        if (r >= 0.6) return COL_ORANGE;
+        if (el instanceof Exit) return COL_EXIT;
+        if (el instanceof Passage) return COL_PASSAGE;
+        return COL_GREEN;
     }
 
     // ── Status helpers ────────────────────────────────────
@@ -342,7 +436,7 @@ public class GraphView {
 
     // ── Positions ─────────────────────────────────────────
 
-    /** Node positions calibrated to match the CY Tech Rez-de-chaussée floor plan. */
+    /** Node positions calibrated to match the CY Tech ground-floor plan. */
     private void initDefaultPositions() {
         put("Réserve", 90, 80);
         put("Bureau 1", 90, 180);
@@ -388,15 +482,216 @@ public class GraphView {
     }
 
 
+    /**
+     * Returns the visual position of any graph element, including virtual
+     * junction rooms created to connect two passages.
+     * @param element graph element to locate
+     * @return canvas position, or null when the element cannot be located
+     */
+    private Point2D positionForElement(BuildingElement element) {
+        if (element == null) return null;
+
+        if (element instanceof Room && element.getName().contains("↔")) {
+            Room junction = (Room) element;
+            List<Passage> connectedPassages = new ArrayList<>();
+
+            for (Door door : junction.getDoors()) {
+                if (door.getPassage() != null) {
+                    connectedPassages.add(door.getPassage());
+                }
+            }
+
+            if (connectedPassages.size() >= 2) {
+                Point2D first = getOrCreate(connectedPassages.get(0));
+                Point2D second = getOrCreate(connectedPassages.get(1));
+
+                if (first != null && second != null) {
+                    return new Point2D(
+                        (first.getX() + second.getX()) / 2.0,
+                        (first.getY() + second.getY()) / 2.0);
+                }
+            }
+        }
+
+        return getOrCreate(element);
+    }
+
+
+    // ── Selection handling ────────────────────────────────
+
+    /**
+     * Handles canvas clicks to select either an agent or a graph element.
+     * Agents are tested first because they are drawn over nodes.
+     */
+    private void setupSelectionHandler() {
+        canvas.setOnMouseClicked(event -> {
+            if (graphContextMenu != null && graphContextMenu.isShowing()) {
+                graphContextMenu.hide();
+            }
+
+            Point2D click = new Point2D(event.getX(), event.getY());
+
+            selectedAgent = findAgentAt(click);
+            selectedElement = selectedAgent == null ? findPassageEdgeAt(click) : null;
+            if (selectedAgent == null && selectedElement == null) {
+                selectedElement = findElementAt(click);
+            }
+
+            refreshSelectionLabel();
+            drawGraphFromModel();
+        });
+    }
+
+    /**
+     * Finds an agent close to the clicked position.
+     * @param click clicked canvas position
+     * @return selected agent or null
+     */
+    private Agent findAgentAt(Point2D click) {
+        for (Agent agent : controller.getGraph().getAgents()) {
+            Point2D position = agentPos(agent);
+            if (position != null && position.distance(click) <= 16) {
+                return agent;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Finds a passage represented by a clicked visual edge.
+     * @param click clicked canvas position
+     * @return selected passage or null
+     */
+    private Passage findPassageEdgeAt(Point2D click) {
+        Graph graph = controller.getGraph();
+
+        for (Passage passage : graph.getPassages()) {
+            Point2D passagePosition = positionForElement(passage);
+            if (passagePosition == null) continue;
+
+            for (Door door : passage.getConnectedDoors()) {
+                Room room = door.getRoom();
+                if (room == null || room.getName().contains("↔")) continue;
+
+                Point2D roomPosition = positionForElement(room);
+                if (distanceToSegment(click, roomPosition, passagePosition) <= 10.0) {
+                    return passage;
+                }
+            }
+        }
+
+        for (BuildingElement element : graph.getElements()) {
+            if (!(element instanceof Room) || !element.getName().contains("↔")) continue;
+
+            Room junction = (Room) element;
+            List<Passage> connectedPassages = new ArrayList<>();
+            for (Door door : junction.getDoors()) {
+                if (door.getPassage() != null) connectedPassages.add(door.getPassage());
+            }
+
+            if (connectedPassages.size() == 2) {
+                Passage first = connectedPassages.get(0);
+                Passage second = connectedPassages.get(1);
+                Point2D firstPosition = positionForElement(first);
+                Point2D secondPosition = positionForElement(second);
+                if (distanceToSegment(click, firstPosition, secondPosition) <= 10.0) {
+                    return first;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Computes the distance from a point to a segment.
+     * @param point tested point
+     * @param start segment start
+     * @param end segment end
+     * @return shortest distance to the segment
+     */
+    private double distanceToSegment(Point2D point, Point2D start, Point2D end) {
+        if (point == null || start == null || end == null) return Double.MAX_VALUE;
+
+        double dx = end.getX() - start.getX();
+        double dy = end.getY() - start.getY();
+        double lengthSquared = dx * dx + dy * dy;
+
+        if (lengthSquared == 0.0) return point.distance(start);
+
+        double t = ((point.getX() - start.getX()) * dx + (point.getY() - start.getY()) * dy)
+            / lengthSquared;
+        t = Math.max(0.0, Math.min(1.0, t));
+
+        Point2D projection = new Point2D(start.getX() + t * dx, start.getY() + t * dy);
+        return point.distance(projection);
+    }
+
+    /**
+     * Finds a visible element close to the clicked position.
+     * @param click clicked canvas position
+     * @return selected element or null
+     */
+    private BuildingElement findElementAt(Point2D click) {
+        for (BuildingElement element : controller.getGraph().getElements()) {
+            if (element.getName().contains("↔")) continue;
+            Point2D position = getOrCreate(element);
+            if (position != null && position.distance(click) <= 45) {
+                return element;
+            }
+        }
+        return null;
+    }
+
+    /** Refreshes the selection statistics text shown in the bottom bar. */
+    private void refreshSelectionLabel() {
+        if (selectionLabel == null) return;
+
+        if (selectedAgent != null) {
+            int remaining = 0;
+            List<BuildingElement> path = selectedAgent.getPath();
+            if (path != null) {
+                remaining = Math.max(0, path.size() - selectedAgent.getPathIndex() - 1);
+            }
+            selectionLabel.setText(
+                "Agent: " + selectedAgent.getName()
+                + " | état=" + selectedAgent.getState()
+                + " | vitesse=" + String.format("%.2f", selectedAgent.getMaxSpeed())
+                + " | étapes restantes=" + remaining);
+            return;
+        }
+
+        if (selectedElement != null) {
+            double density = selectedElement.getMaxCapacity() > 0
+                ? (double) selectedElement.getCurrentOccupancy() / selectedElement.getMaxCapacity()
+                : 0.0;
+            String elementType = selectedElement instanceof Passage ? "Arête" : "Nœud";
+            selectionLabel.setText(
+                elementType + ": " + selectedElement.getName()
+                + " | agents présents=" + selectedElement.getCurrentOccupancy()
+                + " | capacité maximale=" + selectedElement.getMaxCapacity()
+                + " | occupation=" + selectedElement.getCurrentOccupancy() + "/" + selectedElement.getMaxCapacity()
+                + " | agents passés=" + selectedElement.getTotalAgentsPassed()
+                + " | vitesse moyenne=" + String.format("%.2f", selectedElement.getAverageSpeed())
+                + " | densité=" + String.format("%.0f%%", density * 100));
+            return;
+        }
+
+        selectionLabel.setText("Sélection : aucune");
+    }
+
     // ── Context menu ──────────────────────────────────────
 
     private void setupContextMenu() {
-        ContextMenu menu = new ContextMenu();
+        graphContextMenu = new ContextMenu();
+        graphContextMenu.setAutoHide(true);
+        ContextMenu menu = graphContextMenu;
         MenuItem addNode    = new MenuItem("Ajouter un nœud");
         MenuItem editNode   = new MenuItem("Modifier un nœud");
         MenuItem removeNode = new MenuItem("Supprimer un nœud");
         MenuItem moveNode   = new MenuItem("Déplacer un nœud");
         MenuItem addEdge    = new MenuItem("Ajouter une arête");
+        MenuItem editEdgeCapacity = new MenuItem("Modifier capacité arête");
         MenuItem removeEdge = new MenuItem("Supprimer une arête");
         MenuItem addRandN   = new MenuItem("Ajouter X nœuds aléatoires");
         MenuItem addAgent   = new MenuItem("Ajouter un agent");
@@ -406,7 +701,7 @@ public class GraphView {
 
         menu.getItems().addAll(
             addNode, editNode, removeNode, moveNode,
-            new SeparatorMenuItem(), addEdge, removeEdge,
+            new SeparatorMenuItem(), addEdge, editEdgeCapacity, removeEdge,
             new SeparatorMenuItem(), addRandN,
             new SeparatorMenuItem(), addAgent, editAgent, rmAgent, rndAgents);
 
@@ -415,6 +710,7 @@ public class GraphView {
         removeNode.setOnAction(e -> handleRemoveNode());
         moveNode.setOnAction(e   -> handleMoveNode());
         addEdge.setOnAction(e    -> handleAddEdge());
+        editEdgeCapacity.setOnAction(e -> handleEditEdgeCapacity());
         removeEdge.setOnAction(e -> handleRemoveEdge());
         addRandN.setOnAction(e   -> handleAddRandomNodes());
         addAgent.setOnAction(e   -> handleAddAgent());
@@ -422,8 +718,13 @@ public class GraphView {
         rmAgent.setOnAction(e    -> handleRemoveAgent());
         rndAgents.setOnAction(e  -> handleAddRandomAgents());
 
-        canvas.setOnContextMenuRequested(e ->
-            menu.show(canvas, e.getScreenX(), e.getScreenY()));
+        canvas.setOnContextMenuRequested(e -> {
+            if (graphContextMenu.isShowing()) {
+                graphContextMenu.hide();
+            }
+            graphContextMenu.show(canvas, e.getScreenX(), e.getScreenY());
+            e.consume();
+        });
     }
 
     // ── Save / Load ───────────────────────────────────────
@@ -508,9 +809,10 @@ public class GraphView {
         TextField xF = new TextField(), yF = new TextField();
         dialog("Déplacer un nœud", grid("Nœud:", nodeB, "X:", xF, "Y:", yF), () -> {
             try {
-                nodePositions.put(nodeB.getValue(),
-                    new Point2D(Double.parseDouble(xF.getText()),
-                                Double.parseDouble(yF.getText())));
+                double x = Double.parseDouble(xF.getText());
+                double y = Double.parseDouble(yF.getText());
+                nodePositions.put(nodeB.getValue(), new Point2D(x, y));
+                controller.updateNodePosition(nodeB.getValue(), x, y);
                 drawGraphFromModel();
             } catch (Exception ex) { showErr("Coordonnées invalides"); }
         });
@@ -529,6 +831,31 @@ public class GraphView {
         dialog("Ajouter une arête", grid("Salle:", roomB, "Couloir:", passB), () -> {
             controller.addEdge(roomB.getValue(), passB.getValue());
             drawGraphFromModel();
+        });
+    }
+
+
+    private void handleEditEdgeCapacity() {
+        ComboBox<String> edgeB = new ComboBox<>();
+        controller.getGraph().getPassages().stream()
+            .filter(p -> !p.getName().contains("↔"))
+            .forEach(p -> edgeB.getItems().add(p.getName()));
+        edgeB.getSelectionModel().selectFirst();
+
+        TextField capacityF = new TextField("10");
+        dialog("Modifier capacité arête", grid("Arête:", edgeB, "Capacité max:", capacityF), () -> {
+            try {
+                if (edgeB.getValue() == null) {
+                    showErr("Arête invalide");
+                    return;
+                }
+
+                int capacity = Integer.parseInt(capacityF.getText().trim());
+                controller.updateEdgeCapacity(edgeB.getValue(), capacity);
+                drawGraphFromModel();
+            } catch (Exception ex) {
+                showErr("Capacité invalide");
+            }
         });
     }
 
