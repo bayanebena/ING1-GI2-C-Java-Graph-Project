@@ -43,6 +43,12 @@ public class AdminView {
     private TextArea logArea;
     private Timeline uiRefresh;
 
+    /** Context menu displayed on right click and hidden on the next left click. */
+    private ContextMenu graphContextMenu;
+
+    /** Indicates that the last mouse gesture moved a node instead of selecting it. */
+    private boolean nodeWasDragged = false;
+
     private BuildingElement draggedNode = null;
     private double dragOffsetX = 0;
     private double dragOffsetY = 0;
@@ -50,6 +56,9 @@ public class AdminView {
     // Selection state
     private BuildingElement selectedNode = null;
     private Agent selectedAgent = null;
+
+    /** Selected corridor segment when the user clicks a visual edge. */
+    private Door selectedDoor = null;
 
     // Stats panel labels
     private Label statNameLbl, statOccLbl, statPassedLbl, statSpeedLbl, statStatusLbl;
@@ -108,7 +117,7 @@ public class AdminView {
         tickLbl.setStyle("-fx-font-size:11px;-fx-text-fill:#546e7a;");
         Label agentCountLbl = new Label();
         agentCountLbl.setStyle("-fx-font-size:11px;-fx-text-fill:#546e7a;");
-        Label clickHint = new Label("Clic sur nœud = stats · Clic sur agent = trajet");
+        Label clickHint = new Label("Clic nœud/arête/jonction = stats · Clic agent = trajet");
         clickHint.setStyle("-fx-font-size:10px;-fx-text-fill:#bdbdbd;-fx-font-style:italic;");
 
         HBox statusBar = new HBox(20, tickLbl, agentCountLbl, clickHint);
@@ -250,7 +259,8 @@ public class AdminView {
             legendRow(Color.web("#e65100"), "Dense (40-80%)"),
             legendRow(Color.web("#b71c1c"), "Saturé (> 80%)"),
             legendRow(Color.web("#0d47a1"), "Sortie"),
-            legendRow(Color.web("#283593"), "Couloir"),
+            legendRow(Color.web("#283593"), "Jonction / passage"),
+            legendRow(Color.web("#455a64"), "Arête sélectionnable"),
             legendRow(Color.web("#1565c0"), "Agent calme"),
             legendRow(Color.web("#f44336"), "Agent paniqué")
         );
@@ -307,15 +317,19 @@ public class AdminView {
         }
 
         // ── Nodes ─────────────────────────────────────────
+        // Rooms and exits are displayed as large nodes. Passages are displayed
+        // as compact density markers. Internal passage connectors stay hidden.
         for (BuildingElement el : graph.getElements()) {
-            if (el.getName().contains("↔")) continue;
+            if (el.getName().contains("↔") || el instanceof Passage) continue;
 
-            javafx.geometry.Point2D p = pos.get(el.getName());
+            javafx.geometry.Point2D p = getPositionForElement(el);
             if (p == null) continue;
 
             boolean selected = el.equals(selectedNode);
             drawNode(gc, el, p.getX(), p.getY(), selected);
         }
+
+        drawPassageAndJunctionMarkers(gc);
 
         // ── Agents ────────────────────────────────────────
         for (Agent a : graph.getAgents()) {
@@ -326,29 +340,317 @@ public class AdminView {
             }
         }
     }
+    /**
+     * Draws all graph edges. Regular room-to-passage doors are drawn directly,
+     * while internal passage-to-passage connectors are rendered as one corridor
+     * line between the two passages without displaying an extra junction node.
+     *
+     * @param gc canvas graphics context
+     */
     private void drawEdgesFromModel(GraphicsContext gc) {
-        gc.setStroke(Color.web("#455a64"));
-        gc.setLineWidth(3.0);
-
         for (Passage passage : controller.getGraph().getPassages()) {
+            javafx.geometry.Point2D passagePos = getPositionForElement(passage);
+
+            if (passagePos == null) {
+                continue;
+            }
+
             for (Door door : passage.getConnectedDoors()) {
                 Room room = door.getRoom();
 
-                if (room == null) continue;
+                if (room == null || isInternalPassageConnector(room)) {
+                    continue;
+                }
 
-                javafx.geometry.Point2D passagePos = getPositionForElement(passage);
                 javafx.geometry.Point2D roomPos = getPositionForElement(room);
 
-                if (passagePos == null || roomPos == null) continue;
+                if (roomPos == null) {
+                    continue;
+                }
 
-                gc.strokeLine(
-                    passagePos.getX(),
-                    passagePos.getY(),
-                    roomPos.getX(),
-                    roomPos.getY()
-                );
+                drawDensityEdge(gc, roomPos, passagePos, door);
             }
         }
+
+        drawInternalPassageConnectors(gc);
+    }
+
+    /**
+     * Draws hidden passage-to-passage connector rooms as direct corridor lines.
+     * This prevents useless extra junction dots from appearing on the map.
+     *
+     * @param gc canvas graphics context
+     */
+    private void drawInternalPassageConnectors(GraphicsContext gc) {
+        for (BuildingElement element : controller.getGraph().getElements()) {
+            if (!(element instanceof Room) || !isInternalPassageConnector((Room) element)) {
+                continue;
+            }
+
+            List<Door> doors = ((Room) element).getDoors();
+            if (doors.size() < 2) {
+                continue;
+            }
+
+            Passage firstPassage = doors.get(0).getPassage();
+            Passage secondPassage = doors.get(1).getPassage();
+            javafx.geometry.Point2D firstPosition = getPositionForElement(firstPassage);
+            javafx.geometry.Point2D secondPosition = getPositionForElement(secondPassage);
+
+            if (firstPosition == null || secondPosition == null) {
+                continue;
+            }
+
+            drawDensityEdge(gc, firstPosition, secondPosition, doors.get(0));
+        }
+    }
+
+    /**
+     * Draws one selectable corridor segment with a color based on its own
+     * density. A corridor segment is represented by a Door object.
+     *
+     * @param gc canvas graphics context
+     * @param from start position
+     * @param to end position
+     * @param door corridor segment used to compute density and capacity
+     */
+    private void drawDensityEdge(
+            GraphicsContext gc,
+            javafx.geometry.Point2D from,
+            javafx.geometry.Point2D to,
+            Door door
+    ) {
+        if (from == null || to == null || door == null) {
+            return;
+        }
+
+        Color edgeColor = densityColorFromRatio(densityRatioOfDoor(door));
+        boolean selected = door == selectedDoor;
+
+        gc.setStroke(edgeColor);
+        gc.setLineWidth(selected ? 8.0 : 5.0);
+        gc.strokeLine(from.getX(), from.getY(), to.getX(), to.getY());
+
+        gc.setStroke(Color.rgb(255, 255, 255, selected ? 0.45 : 0.20));
+        gc.setLineWidth(selected ? 2.5 : 1.2);
+        gc.strokeLine(from.getX(), from.getY(), to.getX(), to.getY());
+
+        drawDoorCapacityLabel(gc, from, to, door);
+    }
+
+    /**
+     * Draws the occupation/capacity label of a corridor segment near its middle.
+     *
+     * @param gc canvas graphics context
+     * @param from start position
+     * @param to end position
+     * @param door corridor segment to label
+     */
+    private void drawDoorCapacityLabel(
+            GraphicsContext gc,
+            javafx.geometry.Point2D from,
+            javafx.geometry.Point2D to,
+            Door door
+    ) {
+        double midX = (from.getX() + to.getX()) / 2.0;
+        double midY = (from.getY() + to.getY()) / 2.0;
+        String label = visualOccupancyOfDoor(door) + "/" + door.getMaxCapacity();
+
+        gc.setFill(Color.web("#e5e7eb"));
+        gc.setFont(Font.font("Sans", FontWeight.BOLD, 8));
+        gc.fillText(label, midX + 5.0, midY - 5.0);
+    }
+
+    /**
+     * Draws compact density markers for real passages only.
+     *
+     * @param gc canvas graphics context
+     */
+    private void drawPassageAndJunctionMarkers(GraphicsContext gc) {
+        for (Passage passage : controller.getGraph().getPassages()) {
+            drawCompactMarker(gc, passage, false);
+        }
+    }
+
+    /**
+     * Draws a small density marker for a real passage.
+     *
+     * @param gc canvas graphics context
+     * @param element element to draw
+     * @param virtualJunction kept for compatibility; internal connector nodes are not drawn
+     */
+    private void drawCompactMarker(GraphicsContext gc, BuildingElement element, boolean virtualJunction) {
+        javafx.geometry.Point2D p = getPositionForElement(element);
+
+        if (p == null) {
+            return;
+        }
+
+        boolean selected = element.equals(selectedNode);
+        double radius = virtualJunction ? 5.5 : 8.5;
+
+        if (selected) {
+            radius += 3.0;
+        }
+
+        gc.setFill(densityColorFromRatio(densityRatioWithMovingAgents(element)));
+        gc.setStroke(selected ? Color.WHITE : Color.web("#cfd8dc"));
+        gc.setLineWidth(selected ? 3.0 : 1.4);
+        gc.fillOval(p.getX() - radius, p.getY() - radius, radius * 2.0, radius * 2.0);
+        gc.strokeOval(p.getX() - radius, p.getY() - radius, radius * 2.0, radius * 2.0);
+
+        String occupancy = String.valueOf(visualOccupancyOf(element));
+        gc.setFill(Color.web("#eeeeee"));
+        gc.setFont(Font.font("Sans", FontWeight.BOLD, 8));
+        gc.fillText(occupancy, p.getX() + radius + 4.0, p.getY() - radius - 2.0);
+
+        if (!virtualJunction) {
+            String label = shortName(element.getName());
+            gc.setFill(Color.web("#cfd8dc"));
+            gc.setFont(Font.font("Sans", FontWeight.BOLD, 9));
+            gc.fillText(label, p.getX() - label.length() * 2.8, p.getY() + radius + 13.0);
+        }
+    }
+
+    /**
+     * Returns a visual color for a density ratio.
+     *
+     * @param ratio density ratio
+     * @return green, orange or red color
+     */
+    private Color densityColorFromRatio(double ratio) {
+        double clamped = Math.max(0.0, Math.min(1.0, ratio));
+
+        if (clamped >= 0.8) {
+            return Color.web("#b71c1c");
+        }
+
+        if (clamped >= 0.4) {
+            return Color.web("#e65100");
+        }
+
+        return Color.web("#1b5e20");
+    }
+
+    /**
+     * Computes density using stored occupancy and agents currently moving toward an element.
+     *
+     * @param element inspected element
+     * @return density ratio between zero and one
+     */
+    private double densityRatioWithMovingAgents(BuildingElement element) {
+        if (element == null || element.getMaxCapacity() <= 0) {
+            return 0.0;
+        }
+
+        return Math.max(0.0, Math.min(1.0,
+            (double) visualOccupancyOf(element) / element.getMaxCapacity()));
+    }
+
+    /**
+     * Computes the density ratio of a corridor segment.
+     *
+     * @param door corridor segment
+     * @return density ratio between zero and one
+     */
+    private double densityRatioOfDoor(Door door) {
+        if (door == null || door.getMaxCapacity() <= 0) {
+            return 0.0;
+        }
+
+        return Math.max(0.0, Math.min(1.0,
+            (double) visualOccupancyOfDoor(door) / door.getMaxCapacity()));
+    }
+
+    /**
+     * Counts agents visually present inside a corridor segment. Agents are
+     * counted only while they are progressing between the segment endpoints.
+     *
+     * @param door corridor segment
+     * @return number of agents moving inside this segment
+     */
+    private int visualOccupancyOfDoor(Door door) {
+        if (door == null) {
+            return 0;
+        }
+
+        Room room = door.getRoom();
+        if (isInternalPassageConnector(room)) {
+            int total = 0;
+            for (Door segment : room.getDoors()) {
+                total += visualOccupancyOfSingleDoor(segment);
+            }
+            return total;
+        }
+
+        return visualOccupancyOfSingleDoor(door);
+    }
+
+    /**
+     * Counts agents visually present inside one model door segment.
+     *
+     * @param door inspected door segment
+     * @return number of agents moving inside the segment
+     */
+    private int visualOccupancyOfSingleDoor(Door door) {
+        int count = 0;
+        Room room = door.getRoom();
+        Passage passage = door.getPassage();
+
+        for (Agent agent : controller.getGraph().getAgents()) {
+            if (agent.getProgress() <= 0.0) {
+                continue;
+            }
+
+            BuildingElement current = agent.getCurrentLocation();
+            BuildingElement next = agent.getNextInPath();
+
+            if (isSameSegment(current, next, room, passage)) {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /**
+     * Checks whether two path endpoints match a corridor segment.
+     *
+     * @param current first path endpoint
+     * @param next second path endpoint
+     * @param room room-like endpoint of the segment
+     * @param passage passage endpoint of the segment
+     * @return true when both endpoints describe the same segment
+     */
+    private boolean isSameSegment(BuildingElement current, BuildingElement next, Room room, Passage passage) {
+        return (current == room && next == passage) || (current == passage && next == room);
+    }
+
+    /**
+     * Counts agents visually present on an element, including agents in motion.
+     *
+     * @param element inspected element
+     * @return visual occupancy
+     */
+    private int visualOccupancyOf(BuildingElement element) {
+        if (element == null) {
+            return 0;
+        }
+
+        int count = 0;
+
+        for (Agent agent : controller.getGraph().getAgents()) {
+            BuildingElement current = agent.getCurrentLocation();
+            BuildingElement next = agent.getNextInPath();
+
+            if (element.equals(current)) {
+                count++;
+            } else if (agent.getProgress() > 0.0 && element.equals(next)) {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     private javafx.geometry.Point2D getPositionForElement(BuildingElement el) {
@@ -469,15 +771,17 @@ public class AdminView {
         } else {
             gc.fillText(name, x - name.length() * 2.8, y + 3);
         }
-        String occ = el.getCurrentOccupancy() + "/" + el.getMaxCapacity();
+        if (!(el instanceof Exit)) {
+            String occ = el.getCurrentOccupancy() + "/" + el.getMaxCapacity();
 
-        gc.setFill(Color.web("#eeeeee"));
-        gc.setFont(Font.font("Sans", 8));
-        gc.fillText(
-            occ,
-            x - occ.length() * 2.2,
-            y + (el instanceof Exit ? 24 : NR + 11)
-        );
+            gc.setFill(Color.web("#eeeeee"));
+            gc.setFont(Font.font("Sans", 8));
+            gc.fillText(
+                occ,
+                x - occ.length() * 2.2,
+                y + NR + 11
+            );
+        }
     }
 
     private String shortName(String name) {
@@ -514,38 +818,40 @@ public class AdminView {
 
     // ── Mouse handlers ────────────────────────────────────
 
+    /**
+     * Registers mouse handlers for dragging nodes and selecting agents, nodes,
+     * passages, virtual junctions or edges.
+     */
     private void setupMouseHandlers() {
 
         canvas.setOnMousePressed(e -> {
+            if (graphContextMenu != null && graphContextMenu.isShowing()) {
+                graphContextMenu.hide();
+            }
+
+            if (!e.isPrimaryButtonDown()) {
+                return;
+            }
+
             double mx = e.getX();
             double my = e.getY();
+            nodeWasDragged = false;
+            draggedNode = findDraggableElementAt(mx, my);
 
-            draggedNode = null;
+            if (draggedNode != null) {
+                javafx.geometry.Point2D p = getPositionForElement(draggedNode);
 
-            for (BuildingElement el : controller.getGraph().getElements()) {
-                if (el.getName().contains("↔")) continue;
-
-                javafx.geometry.Point2D p = pos.get(el.getName());
-                if (p == null) continue;
-
-                double dist = Math.hypot(p.getX() - mx, p.getY() - my);
-
-                if (dist < NR + 8) {
-                    draggedNode = el;
-                    selectedNode = el;
-                    selectedAgent = null;
-
+                if (p != null) {
                     dragOffsetX = mx - p.getX();
                     dragOffsetY = my - p.getY();
-
-                    draw();
-                    break;
                 }
             }
         });
 
         canvas.setOnMouseDragged(e -> {
             if (draggedNode == null) return;
+
+            nodeWasDragged = true;
 
             double newX = e.getX() - dragOffsetX;
             double newY = e.getY() - dragOffsetY;
@@ -561,69 +867,293 @@ public class AdminView {
 
         canvas.setOnMouseReleased(e -> {
             if (draggedNode != null) {
-                draggedNode.setPosition(
-                    pos.get(draggedNode.getName()).getX(),
-                    pos.get(draggedNode.getName()).getY()
-                );
+                javafx.geometry.Point2D p = pos.get(draggedNode.getName());
+
+                if (p != null) {
+                    draggedNode.setPosition(p.getX(), p.getY());
+                }
             }
 
             draggedNode = null;
         });
 
         canvas.setOnMouseClicked(e -> {
-            if (draggedNode != null) return;
+            if (nodeWasDragged) {
+                nodeWasDragged = false;
+                return;
+            }
 
             double mx = e.getX();
             double my = e.getY();
 
-            Agent clickedAgent = null;
-
-            for (Agent a : controller.getGraph().getAgents()) {
-                javafx.geometry.Point2D p = agentPos(a);
-
-                if (p != null && Math.hypot(p.getX() - mx, p.getY() - my) < 14) {
-                    clickedAgent = a;
-                    break;
-                }
-            }
+            Agent clickedAgent = findAgentAt(mx, my);
 
             if (clickedAgent != null) {
                 selectedAgent = (selectedAgent == clickedAgent) ? null : clickedAgent;
                 selectedNode = null;
+                selectedDoor = null;
                 draw();
+                updateStatsPanel();
                 return;
             }
 
-            BuildingElement clickedNode = null;
+            BuildingElement clickedElement = findSelectableElementAt(mx, my);
 
-            for (BuildingElement el : controller.getGraph().getElements()) {
-                if (el.getName().contains("↔")) continue;
-
-                javafx.geometry.Point2D p = pos.get(el.getName());
-                if (p == null) continue;
-
-                double dist = Math.hypot(p.getX() - mx, p.getY() - my);
-
-                if (dist < NR + 8) {
-                    clickedNode = el;
-                    break;
-                }
+            if (clickedElement != null) {
+                selectedNode = (selectedNode == clickedElement) ? null : clickedElement;
+                selectedDoor = null;
+                selectedAgent = null;
+                draw();
+                updateStatsPanel();
+                return;
             }
 
-            selectedNode = (selectedNode == clickedNode) ? null : clickedNode;
+            Door clickedDoor = findDoorAt(mx, my);
+            selectedDoor = (selectedDoor == clickedDoor) ? null : clickedDoor;
+            selectedNode = null;
             selectedAgent = null;
             draw();
+            updateStatsPanel();
         });
     }
 
+    /**
+     * Finds an agent close to the mouse position.
+     *
+     * @param mx mouse x coordinate
+     * @param my mouse y coordinate
+     * @return selected agent or null
+     */
+    private Agent findAgentAt(double mx, double my) {
+        for (Agent agent : controller.getGraph().getAgents()) {
+            javafx.geometry.Point2D p = agentPos(agent);
+
+            if (p != null && Math.hypot(p.getX() - mx, p.getY() - my) < 14) {
+                return agent;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Finds an element that can be dragged.
+     *
+     * @param mx mouse x coordinate
+     * @param my mouse y coordinate
+     * @return draggable element or null
+     */
+    private BuildingElement findDraggableElementAt(double mx, double my) {
+        for (BuildingElement element : controller.getGraph().getElements()) {
+            if (element.getName().contains("↔")) {
+                continue;
+            }
+
+            javafx.geometry.Point2D p = getPositionForElement(element);
+
+            if (p == null) {
+                continue;
+            }
+
+            double tolerance = element instanceof Passage ? 14.0 : NR + 8.0;
+
+            if (Math.hypot(p.getX() - mx, p.getY() - my) <= tolerance) {
+                return element;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Finds a visible node or passage marker. Hidden internal connectors are ignored.
+     *
+     * @param mx mouse x coordinate
+     * @param my mouse y coordinate
+     * @return selected element or null
+     */
+    private BuildingElement findSelectableElementAt(double mx, double my) {
+        for (BuildingElement element : controller.getGraph().getElements()) {
+            javafx.geometry.Point2D p = getPositionForElement(element);
+
+            if (p == null) {
+                continue;
+            }
+
+            if (element instanceof Room && isInternalPassageConnector((Room) element)) {
+                continue;
+            }
+
+            double tolerance;
+
+            if (element instanceof Passage) {
+                tolerance = 16.0;
+            } else {
+                tolerance = NR + 8.0;
+            }
+
+            if (Math.hypot(p.getX() - mx, p.getY() - my) <= tolerance) {
+                return element;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Finds the corridor segment represented by the clicked visual edge.
+     *
+     * @param mx mouse x coordinate
+     * @param my mouse y coordinate
+     * @return selected corridor segment, or null
+     */
+    private Door findDoorAt(double mx, double my) {
+        javafx.geometry.Point2D click = new javafx.geometry.Point2D(mx, my);
+
+        for (BuildingElement element : controller.getGraph().getElements()) {
+            if (!(element instanceof Room) || !isInternalPassageConnector((Room) element)) {
+                continue;
+            }
+
+            List<Door> doors = ((Room) element).getDoors();
+            if (doors.size() < 2) {
+                continue;
+            }
+
+            javafx.geometry.Point2D first = getPositionForElement(doors.get(0).getPassage());
+            javafx.geometry.Point2D second = getPositionForElement(doors.get(1).getPassage());
+
+            if (first != null && second != null && distanceToSegment(click, first, second) <= 13.0) {
+                return doors.get(0);
+            }
+        }
+
+        for (Passage passage : controller.getGraph().getPassages()) {
+            javafx.geometry.Point2D passagePos = getPositionForElement(passage);
+
+            if (passagePos == null) {
+                continue;
+            }
+
+            for (Door door : passage.getConnectedDoors()) {
+                Room room = door.getRoom();
+
+                if (room == null || isInternalPassageConnector(room)) {
+                    continue;
+                }
+
+                javafx.geometry.Point2D roomPos = getPositionForElement(room);
+
+                if (distanceToSegment(click, roomPos, passagePos) <= 13.0) {
+                    return door;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Computes the shortest distance from a point to a segment.
+     *
+     * @param point tested point
+     * @param start segment start
+     * @param end segment end
+     * @return distance to the segment
+     */
+    private double distanceToSegment(
+            javafx.geometry.Point2D point,
+            javafx.geometry.Point2D start,
+            javafx.geometry.Point2D end
+    ) {
+        if (point == null || start == null || end == null) {
+            return Double.MAX_VALUE;
+        }
+
+        double dx = end.getX() - start.getX();
+        double dy = end.getY() - start.getY();
+        double lengthSquared = dx * dx + dy * dy;
+
+        if (lengthSquared == 0.0) {
+            return point.distance(start);
+        }
+
+        double t = ((point.getX() - start.getX()) * dx + (point.getY() - start.getY()) * dy)
+            / lengthSquared;
+        t = Math.max(0.0, Math.min(1.0, t));
+
+        javafx.geometry.Point2D projection = new javafx.geometry.Point2D(
+            start.getX() + t * dx,
+            start.getY() + t * dy
+        );
+
+        return point.distance(projection);
+    }
+
+    /**
+     * Returns a readable label for a corridor segment.
+     *
+     * @param door corridor segment
+     * @return human-readable segment label
+     */
+    private String edgeLabel(Door door) {
+        if (door == null || door.getRoom() == null || door.getPassage() == null) {
+            return "—";
+        }
+
+        if (isInternalPassageConnector(door.getRoom())) {
+            List<Door> doors = door.getRoom().getDoors();
+            if (doors.size() >= 2) {
+                return shortName(doors.get(0).getPassage().getName())
+                    + " ↔ "
+                    + shortName(doors.get(1).getPassage().getName());
+            }
+        }
+
+        return shortName(door.getRoom().getName()) + " ↔ " + shortName(door.getPassage().getName());
+    }
+
+    /**
+     * Checks whether a room is only an internal connector used to link two real
+     * passages. Such connectors must not be visible as extra junction dots.
+     *
+     * @param room inspected room
+     * @return true if the room is an internal passage connector
+     */
+    private boolean isInternalPassageConnector(Room room) {
+        return room != null
+            && room.getName() != null
+            && room.getName().contains("↔")
+            && room.getDoors() != null
+            && room.getDoors().size() >= 2;
+    }
+
     private void updateStatsPanel() {
-        if (selectedNode != null) {
+        if (selectedDoor != null) {
+            statNameLbl.setText("Couloir: " + edgeLabel(selectedDoor));
+            statOccLbl.setText("Occupation: " + visualOccupancyOfDoor(selectedDoor)
+                + " / " + selectedDoor.getMaxCapacity());
+            statPassedLbl.setText("Agents passés: " + selectedDoor.getTotalAgentsPassed());
+            statSpeedLbl.setText(String.format("Vitesse moy.: %.2f", selectedDoor.getAverageSpeed()));
+            statStatusLbl.setText(String.format(
+                "Densité: %.0f%%",
+                densityRatioOfDoor(selectedDoor) * 100.0
+            ));
+        } else if (selectedNode != null) {
             statNameLbl.setText(selectedNode.getName());
-            statOccLbl.setText("Occupation: " + selectedNode.getCurrentOccupancy()
-                + " / " + selectedNode.getMaxCapacity());
+            if (selectedNode instanceof Exit) {
+                statOccLbl.setText("Sortie: capacité non affichée");
+            } else {
+                statOccLbl.setText("Occupation: " + selectedNode.getCurrentOccupancy()
+                    + " / " + selectedNode.getMaxCapacity());
+            }
             statPassedLbl.setText("Agents passés: " + selectedNode.getTotalAgentsPassed());
             statSpeedLbl.setText(String.format("Vitesse moy.: %.2f", selectedNode.getAverageSpeed()));
-            statStatusLbl.setText("Statut: " + selectedNode.getStatus());
+            statStatusLbl.setText(String.format(
+                "Statut: %s · Densité: %.0f%%",
+                selectedNode.getStatus(),
+                densityRatioWithMovingAgents(selectedNode) * 100.0
+            ));
         } else if (selectedAgent != null) {
             statNameLbl.setText(selectedAgent.getName());
             statOccLbl.setText("État: " + selectedAgent.getState());
@@ -672,21 +1202,25 @@ public class AdminView {
         );
     }
 
+    /**
+     * Returns the color of a large node according to its density.
+     *
+     * @param el element to color
+     * @return node color
+     */
     private Color nodeColor(BuildingElement el) {
         if (el.isBlocked()) return Color.web("#424242");
         if (el instanceof Exit) return Color.web("#0d47a1");
-        if (el instanceof Passage) return Color.web("#283593");
-        double r = el.getMaxCapacity() > 0
-            ? (double) el.getCurrentOccupancy() / el.getMaxCapacity() : 0;
-        if (r < 0.4) return Color.web("#1b5e20");
-        if (r < 0.8) return Color.web("#e65100");
-        return Color.web("#b71c1c");
+        return densityColorFromRatio(densityRatioWithMovingAgents(el));
     }
 
     // ── Context menu ──────────────────────────────────────
 
+    /**
+     * Creates the right-click menu and makes it disappear when the user clicks elsewhere.
+     */
     private void setupContextMenu() {
-        ContextMenu menu = new ContextMenu();
+        graphContextMenu = new ContextMenu();
         MenuItem addN = new MenuItem("Ajouter un nœud");
         MenuItem rmN  = new MenuItem("Supprimer un nœud");
         MenuItem editN = new MenuItem("Modifier un nœud");
@@ -695,7 +1229,7 @@ public class AdminView {
         MenuItem editE = new MenuItem("Modifier une arête");
         MenuItem rmE  = new MenuItem("Supprimer une arête");
         MenuItem rndN = new MenuItem("X nœuds aléatoires");
-        menu.getItems().addAll(addN, editN, rmN, moveN,
+        graphContextMenu.getItems().addAll(addN, editN, rmN, moveN,
             new SeparatorMenuItem(), addE, editE, rmE, new SeparatorMenuItem(), rndN);
         addN.setOnAction(e -> handleAddNode());
         editN.setOnAction(e -> handleEditNode());
@@ -705,8 +1239,14 @@ public class AdminView {
         editE.setOnAction(e -> handleEditEdge());
         rmE.setOnAction(e  -> handleRemoveEdge());
         rndN.setOnAction(e -> handleAddRandomNodes());
-        canvas.setOnContextMenuRequested(e ->
-            menu.show(canvas, e.getScreenX(), e.getScreenY()));
+        canvas.setOnContextMenuRequested(e -> {
+            if (graphContextMenu.isShowing()) {
+                graphContextMenu.hide();
+            }
+
+            graphContextMenu.show(canvas, e.getScreenX(), e.getScreenY());
+            e.consume();
+        });
     }
 
     // ── Handlers ──────────────────────────────────────────
@@ -757,7 +1297,7 @@ public class AdminView {
             if (nb.getValue() != null) {
                 controller.removeNode(nb.getValue());
                 pos.remove(nb.getValue());
-                selectedNode = null; draw();
+                selectedNode = null; selectedDoor = null; draw();
             }
         });
     }
@@ -777,40 +1317,59 @@ public class AdminView {
         });
     }
 
+    /**
+     * Opens a dialog to edit a corridor segment. The capacity belongs to the
+     * selected edge/corridor, not to the exit node.
+     */
     private void handleEditEdge() {
-        // Edit edge = modify the passage properties (distance, speedFactor, lanes)
-        ComboBox<String> passB = new ComboBox<>();
-        controller.getGraph().getPassages().stream()
-            .filter(p -> !p.getName().contains("↔"))
-            .forEach(p -> passB.getItems().add(p.getName()));
-        passB.getSelectionModel().selectFirst();
-        TextField distF = new TextField(), speedF = new TextField(), lanesF = new TextField();
+        ComboBox<String> edgeB = new ComboBox<>();
+        Map<String, Door> doorByLabel = new HashMap<>();
+        int index = 1;
 
-        passB.setOnAction(e -> {
-            controller.getGraph().getPassages().stream()
-                .filter(p -> p.getName().equals(passB.getValue()))
-                .findFirst().ifPresent(p -> {
-                    distF.setText(String.valueOf(p.getDistance()));
-                    speedF.setText(String.valueOf(p.getSpeedFactor()));
-                    lanesF.setText(String.valueOf(p.getLanes()));
-                });
+        for (Passage passage : controller.getGraph().getPassages()) {
+            for (Door door : passage.getConnectedDoors()) {
+                String label = index + ". " + edgeLabel(door);
+                doorByLabel.put(label, door);
+                edgeB.getItems().add(label);
+                index++;
+            }
+        }
+
+        edgeB.getSelectionModel().selectFirst();
+
+        TextField capacityF = new TextField();
+
+        edgeB.setOnAction(e -> {
+            Door selected = doorByLabel.get(edgeB.getValue());
+
+            if (selected != null) {
+                capacityF.setText(String.valueOf(selected.getMaxCapacity()));
+            }
         });
-        if (!passB.getItems().isEmpty()) passB.fireEvent(new javafx.event.ActionEvent());
 
-        dialog("Modifier une arête (passage)",
-            grid("Passage:", passB, "Distance:", distF,
-                "Facteur vitesse:", speedF, "Couloirs (lanes):", lanesF), () -> {
+        if (!edgeB.getItems().isEmpty()) {
+            edgeB.fireEvent(new javafx.event.ActionEvent());
+        }
+
+        dialog("Modifier une arête / couloir",
+            grid("Couloir:", edgeB, "Capacité max:", capacityF), () -> {
             try {
-                controller.getGraph().getPassages().stream()
-                    .filter(p -> p.getName().equals(passB.getValue()))
-                    .findFirst().ifPresent(p -> {
-                        p.setDistance(Double.parseDouble(distF.getText()));
-                        p.setSpeedFactor(Double.parseDouble(speedF.getText()));
-                        p.setLanes(Integer.parseInt(lanesF.getText()));
-                    });
-                log("Arête modifiée: " + passB.getValue());
+                Door selected = doorByLabel.get(edgeB.getValue());
+
+                if (selected == null) {
+                    showErr("Aucun couloir sélectionné");
+                    return;
+                }
+
+                int capacity = Integer.parseInt(capacityF.getText().trim());
+                selected.setMaxCapacity(capacity);
+                log("Couloir modifié: " + edgeLabel(selected));
                 draw();
-            } catch (Exception ex) { showErr("Valeurs invalides"); }
+            } catch (NumberFormatException ex) {
+                showErr("La capacité doit être un entier valide.");
+            } catch (IllegalArgumentException ex) {
+                showErr(ex.getMessage());
+            }
         });
     }
 
